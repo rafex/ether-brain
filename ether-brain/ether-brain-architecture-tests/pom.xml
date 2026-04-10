@@ -12,6 +12,12 @@
     <artifactId>ether-brain-architecture-tests</artifactId>
     <name>ether-brain-architecture-tests</name>
 
+    <properties>
+        <!-- Test-only module — do not publish to Maven Central or GitHub Packages -->
+        <maven.deploy.skip>true</maven.deploy.skip>
+        <maven.install.skip>true</maven.install.skip>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>dev.rafex.etherbrain</groupId>

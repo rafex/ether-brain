@@ -17,7 +17,16 @@
     <packaging>pom</packaging>
 
     <name>ether-brain-parent</name>
-    <description>Hexagonal agent runtime in Java 21</description>
+    <description>Hexagonal agent runtime for building AI agents in Java 21</description>
+    <url>https://rafex.dev/ether/brain</url>
+
+    <inceptionYear>2026</inceptionYear>
+
+    <scm>
+        <connection>scm:git:https://github.com/rafex/ether-brain.git</connection>
+        <developerConnection>scm:git:https://github.com/rafex/ether-brain.git</developerConnection>
+        <url>https://github.com/rafex/ether-brain</url>
+    </scm>
 
     <modules>
         <module>ether-brain-common</module>
