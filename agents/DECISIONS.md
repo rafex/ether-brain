@@ -53,3 +53,18 @@ Registrar una decision cuando cambie:
   la arquitectura verificable, facilita DI manual y reduce el riesgo de
   mezclar el loop del agente con adaptadores concretos.
 - Reemplaza: `none`
+
+### DEC-0004 - Logging estandarizado sobre ether-logging-core
+
+- Fecha: 2026-04-10
+- Estado: accepted
+- Contexto: EtherBrain necesita trazas basicas desde v0, pero sin meter
+  frameworks de logging que oculten la configuracion o introduzcan
+  complejidad innecesaria en el runtime.
+- Decision: usar `ether-logging-core` como capa ligera sobre
+  `java.util.logging` para configuracion programatica y mensajes
+  consistentes.
+- Consecuencias: el runtime mantiene logging estandar de JVM, pero con
+  una API comun del ecosistema Ether que facilita evolucion futura hacia
+  mejor observabilidad.
+- Reemplaza: `none`

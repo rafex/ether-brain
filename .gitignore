@@ -1,0 +1,12 @@
+.DS_Store
+.idea/
+.vscode/
+*.iml
+
+.mvn/timing.properties
+
+**/target/
+**/dependency-reduced-pom.xml
+**/.flattened-pom.xml
+
+*.log

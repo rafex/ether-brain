@@ -14,11 +14,9 @@ import dev.rafex.etherbrain.ports.tools.ToolCall;
 import dev.rafex.etherbrain.ports.tools.ToolExecutor;
 import dev.rafex.etherbrain.ports.tools.ToolRegistry;
 import dev.rafex.etherbrain.ports.tools.ToolResult;
-import java.util.logging.Logger;
+import dev.rafex.ether.logging.core.logger.EtherLog;
 
 public final class AgentLoop {
-
-    private static final Logger LOGGER = Logger.getLogger(AgentLoop.class.getName());
 
     private final ModelClient modelClient;
     private final ToolRegistry toolRegistry;
@@ -44,17 +42,35 @@ public final class AgentLoop {
         for (int step = 0; step < context.agentConfig().maxSteps(); step++) {
             int currentStep = step + 1;
             policyEngine.checkBeforeStep(context, step);
-            LOGGER.info(() -> "Step %d - building model request".formatted(currentStep));
+            EtherLog.info(
+                    AgentLoop.class,
+                    "Step {} - building model request for session {}",
+                    currentStep,
+                    context.sessionId()
+            );
             ModelRequest request = promptBuilder.build(context, toolRegistry);
             ModelResponse response = modelClient.generate(request);
 
             if (response instanceof FinalAnswer finalAnswer) {
+                EtherLog.info(
+                        AgentLoop.class,
+                        "Step {} - final answer generated for session {}",
+                        currentStep,
+                        context.sessionId()
+                );
                 context.conversationState().add(new Message(Message.Role.ASSISTANT, finalAnswer.content()));
                 policyEngine.checkAfterStep(context, step);
                 return finalAnswer.content();
             }
 
             if (response instanceof ToolRequest toolRequest) {
+                EtherLog.info(
+                        AgentLoop.class,
+                        "Step {} - executing tool {} for session {}",
+                        currentStep,
+                        toolRequest.toolName(),
+                        context.sessionId()
+                );
                 ToolResult result = toolExecutor.execute(
                         new ToolCall(toolRequest.toolName(), toolRequest.arguments()),
                         context

@@ -5,6 +5,7 @@ import dev.rafex.etherbrain.core.prompt.PromptBuilder;
 import dev.rafex.etherbrain.core.runtime.AgentLoop;
 import dev.rafex.etherbrain.core.runtime.AgentRuntime;
 import dev.rafex.etherbrain.core.tools.DefaultToolExecutor;
+import dev.rafex.ether.logging.core.config.LoggingConfigurator;
 import dev.rafex.etherbrain.infra.memory.InMemorySessionStore;
 import dev.rafex.etherbrain.ports.model.FinalAnswer;
 import dev.rafex.etherbrain.ports.model.Message;
@@ -17,10 +18,13 @@ import dev.rafex.etherbrain.tools.local.CurrentTimeTool;
 import dev.rafex.etherbrain.tools.local.EchoTool;
 import dev.rafex.etherbrain.tools.local.InMemoryToolRegistry;
 import java.util.Set;
+import java.util.logging.Level;
 
 public final class ApplicationBootstrap {
 
     public AgentRuntime bootstrapForDemo() {
+        LoggingConfigurator.configureRootLogger(Level.INFO);
+
         InMemoryToolRegistry toolRegistry = new InMemoryToolRegistry()
                 .register(new EchoTool())
                 .register(new CurrentTimeTool());

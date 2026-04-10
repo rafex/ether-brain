@@ -14,8 +14,9 @@ Fuente de verdad de la base tecnologica de EtherBrain.
   opcion por defecto para HTTP, concurrencia, logging y colecciones.
 - `java.net.http.HttpClient`:
   cliente HTTP para adaptadores de modelo.
-- `java.util.logging`:
-  logging inicial y trazas simples.
+- `java.util.logging` + `ether-logging-core`:
+  baseline de logging programatico y formateo consistente sin frameworks
+  externos.
 
 ## Frameworks
 
