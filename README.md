@@ -22,12 +22,17 @@ sin depender de frameworks pesados.
   reglas de trabajo para agentes dentro de EtherBrain.
 - [`agents/README.md`](./agents/README.md):
   indice del contexto operativo y documental del proyecto.
+- `ether-brain-*`:
+  modulos Maven del runtime hexagonal, siguiendo el patron de puertos,
+  adaptadores, bootstrap y pruebas de arquitectura.
 
 ## Alcance actual
 
 - Disenar el runtime base de un solo agente.
 - Definir contratos para modelo, tools, memoria de sesion y politicas.
 - Preparar la evolucion hacia persistencia, handoffs y mas adaptadores.
+- Mantener un scaffold multi-modulo que preserve la arquitectura desde
+  la primera linea de codigo.
 
 ## Flujo recomendado
 

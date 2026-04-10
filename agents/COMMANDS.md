@@ -9,38 +9,33 @@ Reducir la ambiguedad de ejecucion para agentes y humanos.
 ## Setup
 
 ```bash
-mvn -v
+./mvnw -v
 java -version
 ```
 
 ## Desarrollo
 
 ```bash
-mvn compile
-mvn exec:java -Dexec.mainClass=com.etherbrain.Main
+./mvnw compile
+./mvnw install -DskipTests
+cd ether-brain-transport-cli && ./mvnw exec:java -Dexec.args="What time is it?"
 ```
 
 ## Tests
 
 ```bash
-mvn test
+./mvnw test
+./mvnw -pl ether-brain-core -Dtest=AgentLoopTest test
 ```
 
 ## Calidad
 
 ```bash
-mvn verify
+./mvnw verify
 ```
 
 ## Build
 
 ```bash
-mvn clean package
-```
-
-## Utilidad
-
-```bash
-mvn -Dtest=AgentLoopTest test
-mvn -DskipTests package
+./mvnw clean package
 ```

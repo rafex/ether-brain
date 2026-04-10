@@ -37,3 +37,19 @@ Registrar una decision cuando cambie:
 - Consecuencias: el MVP requerira contratos y parseo mas controlados,
   pero el sistema sera mas transparente y portable.
 - Reemplaza: `none`
+
+### DEC-0003 - Scaffold multi-modulo alineado a referencia hexagonal
+
+- Fecha: 2026-04-10
+- Estado: accepted
+- Contexto: EtherBrain necesita preservar fronteras claras entre
+  dominio, puertos, adaptadores y bootstrap desde v0, tomando como
+  referencia estructural `ether-archetype` sin heredar infraestructura
+  que aun no aplica al runtime.
+- Decision: organizar el codigo en modulos Maven separados para
+  `common`, `ports`, `core`, `infra-memory`, `tools-local`,
+  `bootstrap`, `transport-cli` y `architecture-tests`.
+- Consecuencias: aumenta el numero de modulos desde el inicio, pero deja
+  la arquitectura verificable, facilita DI manual y reduce el riesgo de
+  mezclar el loop del agente con adaptadores concretos.
+- Reemplaza: `none`
