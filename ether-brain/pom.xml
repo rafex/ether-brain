@@ -8,7 +8,7 @@
         <groupId>dev.rafex.ether.parent</groupId>
         <artifactId>ether-parent</artifactId>
         <version>9.5.5-SNAPSHOT</version>
-        <relativePath>../ether-parent/ether-parent/pom.xml</relativePath>
+        <relativePath>../../ether-parent/ether-parent/pom.xml</relativePath>
     </parent>
 
     <groupId>dev.rafex.etherbrain</groupId>
