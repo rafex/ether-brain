@@ -22,6 +22,23 @@
 
     <inceptionYear>2026</inceptionYear>
 
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/license/mit/</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <name>Raúl Eduardo González Argote</name>
+            <email>rafex@rafex.dev</email>
+            <organization>dev.rafex</organization>
+            <organizationUrl>https://rafex.dev</organizationUrl>
+        </developer>
+    </developers>
+
     <scm>
         <connection>scm:git:https://github.com/rafex/ether-brain.git</connection>
         <developerConnection>scm:git:https://github.com/rafex/ether-brain.git</developerConnection>
@@ -66,6 +83,37 @@
     </dependencyManagement>
 
     <build>
+        <!-- Activate source and javadoc plugins for all jar child modules so
+             Maven Central receives the required -sources.jar and -javadoc.jar.
+             These executions are inherited; ether-parent only declares them in
+             pluginManagement which is not enough for multi-level inheritance. -->
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-source-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>attach-sources</id>
+                        <goals><goal>jar-no-fork</goal></goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>attach-javadocs</id>
+                        <goals><goal>jar</goal></goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <failOnError>false</failOnError>
+                    <doclint>none</doclint>
+                    <quiet>true</quiet>
+                </configuration>
+            </plugin>
+        </plugins>
         <pluginManagement>
             <plugins>
                 <plugin>
