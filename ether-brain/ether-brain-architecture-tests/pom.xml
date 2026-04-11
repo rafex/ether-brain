@@ -18,6 +18,20 @@
         <maven.install.skip>true</maven.install.skip>
     </properties>
 
+    <build>
+        <plugins>
+            <!-- central-publishing-maven-plugin does not respect maven.deploy.skip;
+                 skip it explicitly so this test module is never uploaded to Central. -->
+            <plugin>
+                <groupId>org.sonatype.central</groupId>
+                <artifactId>central-publishing-maven-plugin</artifactId>
+                <configuration>
+                    <skip>true</skip>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
     <dependencies>
         <dependency>
             <groupId>dev.rafex.etherbrain</groupId>
