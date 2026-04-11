@@ -24,6 +24,11 @@ iteracion
   puerto de salida para recuperar y persistir estado conversacional.
 - `ToolRegistry`:
   puerto de consulta para descubrir tools habilitadas.
+- `ResourceRegistry`:
+  puerto de consulta y lectura para contexto externo direccionable.
+- `PromptRegistry`:
+  puerto de consulta para prompts reutilizables y futuras integraciones
+  remotas.
 - `ToolExecutor`:
   puerto de salida para ejecutar una tool concreta con contexto.
 - `PolicyEngine`:
@@ -47,7 +52,7 @@ iteracion
   CLI, API HTTP o pruebas de integracion.
 - Salida:
   cliente HTTP para proveedores LLM, almacenamiento en memoria o archivo,
-  logger y tools locales.
+  logger, tools locales y futuras fuentes remotas de capacidades.
 
 ## Flujo principal
 
@@ -66,6 +71,8 @@ iteracion
 - Las tools no deben acceder directamente a infraestructura fuera de su
   adaptador sin pasar por politicas.
 - Los formatos de respuesta del proveedor no deben filtrarse al dominio.
+- Integraciones como MCP deben entrar mediante registros o proveedores
+  especificos, no acopladas al `AgentLoop`.
 
 ## Riesgos actuales
 

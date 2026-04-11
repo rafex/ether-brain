@@ -68,3 +68,19 @@ Registrar una decision cuando cambie:
   una API comun del ecosistema Ether que facilita evolucion futura hacia
   mejor observabilidad.
 - Reemplaza: `none`
+
+### DEC-0005 - ToolRegistry se preserva y se compone
+
+- Fecha: 2026-04-10
+- Estado: accepted
+- Contexto: EtherBrain necesita crecer hacia fuentes remotas de
+  capacidades como MCP sin reescribir el loop del agente ni forzar a
+  `ToolRegistry` a modelar recursos y prompts.
+- Decision: mantener `ToolRegistry` como fachada estable para tools,
+  introducir `CompositeToolRegistry` para mezclar varias fuentes y crear
+  registros hermanos `ResourceRegistry` y `PromptRegistry` para
+  capacidades no invocables.
+- Consecuencias: el loop principal sigue intacto, mientras la
+  arquitectura queda preparada para integrar MCP como proveedor de
+  registros en vez de acoplar el protocolo al nucleo.
+- Reemplaza: `none`

@@ -24,7 +24,8 @@ respuesta final dentro de limites definidos.
 
 - Incluye:
   contratos de dominio, loop principal, tools locales, memoria en
-  memoria, politicas basicas y trazas.
+  memoria, politicas basicas, trazas y puertos paralelos para futura
+  expansion de recursos y prompts.
 - Excluye:
   multiagente, memoria persistente avanzada, MCP, RAG y streaming.
 
@@ -37,6 +38,8 @@ respuesta final dentro de limites definidos.
   tool.
 - RF-4: El runtime debe resolver la tool solicitada mediante un registro
   y un ejecutor.
+- RF-4.1: El runtime debe preservar `ToolRegistry` como contrato estable
+  para tools, aun si en el futuro mezcla fuentes locales y remotas.
 - RF-5: El resultado de la tool debe incorporarse al estado y permitir
   una nueva iteracion.
 - RF-6: El runtime debe terminar por respuesta final o politica de corte.
@@ -64,6 +67,8 @@ respuesta final dentro de limites definidos.
 
 - Dependencia: definicion estable de contratos como `ModelClient`,
   `Tool`, `ToolResult` y `ConversationState`.
+- Dependencia: separar registros de tools, recursos y prompts sin
+  contaminar el loop principal antes de integrar fuentes remotas.
 - Riesgo: sobrecomplicar el parseo de salida demasiado pronto.
 - Riesgo: mezclar el dominio con detalles HTTP del proveedor.
 
