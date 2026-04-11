@@ -4,6 +4,8 @@ PROJECT_GROUP_ID    := dev.rafex.etherbrain
 PROJECT_ARTIFACT_ID := ether-brain-parent
 # Multi-module pom packaging: no separate source:jar / javadoc:jar at root level
 PRE_DEPLOY_GOALS    :=
+# Exclude test-only module from the deploy reactor so it is never staged to Central
+DEPLOY_EXTRA_ARGS   := -pl !ether-brain-architecture-tests
 
 # Include shared build logic
 include ../build-helpers/common.mk
