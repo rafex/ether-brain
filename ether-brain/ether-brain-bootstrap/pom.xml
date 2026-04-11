@@ -31,7 +31,7 @@
         <dependency>
             <groupId>dev.rafex.ether.logging</groupId>
             <artifactId>ether-logging-core</artifactId>
-            <version>9.5.5-SNAPSHOT</version>
+            <!-- version managed by ether-parent dependencyManagement -->
         </dependency>
     </dependencies>
 </project>
