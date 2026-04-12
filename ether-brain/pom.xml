@@ -113,7 +113,10 @@
                     <quiet>true</quiet>
                 </configuration>
             </plugin>
-            <!-- flatten-maven-plugin inherited from ether-parent -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>flatten-maven-plugin</artifactId>
+            </plugin>
         </plugins>
         <pluginManagement>
             <plugins>
