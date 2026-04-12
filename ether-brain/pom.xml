@@ -113,32 +113,7 @@
                     <quiet>true</quiet>
                 </configuration>
             </plugin>
-            <!-- Flatten POMs before staging so Central's validator sees all
-                 inherited fields (description, url, licenses, scm, developers)
-                 and resolved dependency versions directly in each module POM.
-                 Without this, Central validates raw pom.xml files and cannot
-                 resolve parent-chain inheritance from a first-time upload. -->
-            <plugin>
-                <groupId>org.codehaus.mojo</groupId>
-                <artifactId>flatten-maven-plugin</artifactId>
-                <version>1.7.0</version>
-                <configuration>
-                    <updatePomFile>true</updatePomFile>
-                    <flattenMode>ossrh</flattenMode>
-                </configuration>
-                <executions>
-                    <execution>
-                        <id>flatten</id>
-                        <phase>process-resources</phase>
-                        <goals><goal>flatten</goal></goals>
-                    </execution>
-                    <execution>
-                        <id>flatten.clean</id>
-                        <phase>clean</phase>
-                        <goals><goal>clean</goal></goals>
-                    </execution>
-                </executions>
-            </plugin>
+            <!-- flatten-maven-plugin inherited from ether-parent -->
         </plugins>
         <pluginManagement>
             <plugins>
