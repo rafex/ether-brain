@@ -11,7 +11,7 @@
         <relativePath>../../ether-parent/ether-parent/pom.xml</relativePath>
     </parent>
 
-    <groupId>dev.rafex.etherbrain</groupId>
+    <groupId>dev.rafex.ether.brain</groupId>
     <artifactId>ether-brain-parent</artifactId>
     <version>0.1.0-SNAPSHOT</version>
     <packaging>pom</packaging>
