@@ -10,3 +10,8 @@
 **/.flattened-pom.xml
 
 *.log
+
+# Eclipse
+.classpath
+.project
+.settings/

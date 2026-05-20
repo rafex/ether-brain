@@ -49,7 +49,11 @@
         <module>ether-brain-common</module>
         <module>ether-brain-ports</module>
         <module>ether-brain-core</module>
+        <module>ether-brain-spi-model</module>
         <module>ether-brain-infra-memory</module>
+        <module>ether-brain-infra-model-demo</module>
+        <module>ether-brain-infra-model-openai</module>
+        <module>ether-brain-infra-model-ollama</module>
         <module>ether-brain-tools-local</module>
         <module>ether-brain-bootstrap</module>
         <module>ether-brain-transport-cli</module>
