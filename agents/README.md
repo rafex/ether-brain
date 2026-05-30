@@ -23,8 +23,11 @@ Si eres un agente o una persona entrando por primera vez:
   base tecnologica, versiones y restricciones.
 - [`CONVENTIONS.md`](./CONVENTIONS.md):
   reglas de modelado, paquetes, testing y documentacion.
+- [`OPERATIONS.md`](./OPERATIONS.md):
+  guia completa de operacion: variables de entorno, ejecucion, sesiones,
+  diagnostico y como agregar una tool.
 - [`COMMANDS.md`](./COMMANDS.md):
-  comandos de setup, build, test y ejecucion.
+  comandos de setup, build, test y ejecucion (referencia rapida).
 - [`DECISIONS.md`](./DECISIONS.md):
   decisiones persistentes del proyecto.
 - [`SPEC.md`](./SPEC.md):

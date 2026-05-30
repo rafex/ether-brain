@@ -6,20 +6,34 @@ Direccion del proyecto EtherBrain en el tiempo.
 
 Dar contexto de prioridad sin convertir esto en una lista de tickets.
 
+## Hecho
+
+- Contratos del runtime base: mensajes, requests, responses y tool calls.
+- Loop de un solo agente con maximo de pasos y recuperacion de errores
+  de tool.
+- Tools locales de prueba y almacenamiento en memoria.
+- Trazas simples y politicas minimas de seguridad.
+- `HttpModelClient` agnostico con `AnthropicCodec` y `OpenAiCodec`.
+- `FileSessionStore` para sesiones persistentes en JSON.
+- `ConversationState` con ventana de mensajes configurable.
+- `AgentConfig` con `RemoteServiceConfig` para servicios externos.
+- `ApplicationBootstrap` listo con env vars (`MODEL_PROVIDER`, API keys,
+  `SESSION_DIR`).
+- CLI con REPL interactivo y flag `--session`.
+- `modelTimeout` aplicado en el loop con virtual threads.
+- Documentacion operativa: `OPERATIONS.md` y `COMMANDS.md`.
+
 ## Ahora
 
-- Definir contratos del runtime base: mensajes, requests, responses y
-  tool calls.
-- Implementar el loop de un solo agente con maximo de pasos.
-- Crear tools locales de prueba y almacenamiento en memoria.
-- Incorporar trazas simples y politicas minimas de seguridad.
+- Tests de integracion del loop completo con proveedor real (smoke test).
+- Registrar `KnowledgeSearchTool` en bootstrap cuando faiss-poc este
+  disponible en el VPS.
 
 ## Despues
 
-- Agregar adaptador HTTP real para uno o mas proveedores LLM.
-- Introducir persistencia de sesion en archivo o base de datos.
-- Mejorar la ventana de mensajes y estrategia de resumen.
-- Formalizar pruebas de integracion del loop completo.
+- Pruebas de integracion del loop completo con modelo real.
+- Estrategia de resumen de historial cuando el contexto es largo.
+- `ether-brain-transport-http` para exponer el runtime como API HTTP.
 
 ## Mas adelante
 

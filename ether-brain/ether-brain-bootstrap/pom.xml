@@ -29,9 +29,24 @@
             <version>${project.version}</version>
         </dependency>
         <dependency>
+            <groupId>dev.rafex.ether.brain</groupId>
+            <artifactId>ether-brain-infra-http</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dev.rafex.ether.brain</groupId>
+            <artifactId>ether-brain-infra-file</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dev.rafex.ether.brain</groupId>
+            <artifactId>ether-brain-tools-remote</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
             <groupId>dev.rafex.ether.logging</groupId>
             <artifactId>ether-logging-core</artifactId>
-            <!-- version managed by ether-parent dependencyManagement -->
+            <version>${ether-logging-core.version}</version>
         </dependency>
     </dependencies>
 

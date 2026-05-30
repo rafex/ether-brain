@@ -50,7 +50,10 @@
         <module>ether-brain-ports</module>
         <module>ether-brain-core</module>
         <module>ether-brain-infra-memory</module>
+        <module>ether-brain-infra-http</module>
+        <module>ether-brain-infra-file</module>
         <module>ether-brain-tools-local</module>
+        <module>ether-brain-tools-remote</module>
         <module>ether-brain-bootstrap</module>
         <module>ether-brain-transport-cli</module>
         <module>ether-brain-architecture-tests</module>
@@ -63,6 +66,8 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <junit.version>5.12.2</junit.version>
         <archunit.version>1.4.1</archunit.version>
+        <!-- Pinned because ether-parent 9.5.5-SNAPSHOT dropped ether-logging from its BOM -->
+        <ether-logging-core.version>9.5.5-SNAPSHOT</ether-logging-core.version>
     </properties>
 
     <dependencyManagement>

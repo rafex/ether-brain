@@ -69,6 +69,21 @@ Registrar una decision cuando cambie:
   mejor observabilidad.
 - Reemplaza: `none`
 
+### DEC-0006 - Jackson en modulos infra HTTP y file
+
+- Fecha: 2026-05-29
+- Estado: accepted
+- Contexto: EtherBrain necesita serializar/deserializar JSON para llamar
+  a APIs de proveedores LLM y persistir sesiones en archivos. La
+  biblioteca estandar de Java no incluye un parser JSON.
+- Decision: agregar `jackson-databind` como dependencia en
+  `ether-brain-infra-http` y `ether-brain-infra-file`. No se introduce
+  en `ports`, `core` ni `common`, preservando el dominio libre de
+  dependencias externas.
+- Consecuencias: el dominio sigue limpio; los adaptadores de
+  infraestructura pueden evolucionar la serializacion sin tocar el loop.
+- Reemplaza: `none`
+
 ### DEC-0005 - ToolRegistry se preserva y se compone
 
 - Fecha: 2026-04-10

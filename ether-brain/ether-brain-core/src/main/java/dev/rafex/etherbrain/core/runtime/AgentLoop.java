@@ -15,6 +15,14 @@ import dev.rafex.etherbrain.ports.tools.ToolExecutor;
 import dev.rafex.etherbrain.ports.tools.ToolRegistry;
 import dev.rafex.etherbrain.ports.tools.ToolResult;
 import dev.rafex.ether.logging.core.logger.EtherLog;
+import java.time.Duration;
+import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 public final class AgentLoop {
 
@@ -49,7 +57,7 @@ public final class AgentLoop {
                     context.sessionId()
             );
             ModelRequest request = promptBuilder.build(context, toolRegistry);
-            ModelResponse response = modelClient.generate(request);
+            ModelResponse response = callWithTimeout(request, context.agentConfig().modelTimeout());
 
             if (response instanceof FinalAnswer finalAnswer) {
                 EtherLog.info(
@@ -64,6 +72,10 @@ public final class AgentLoop {
             }
 
             if (response instanceof ToolRequest toolRequest) {
+                String callId = toolRequest.toolCallId() != null
+                        ? toolRequest.toolCallId()
+                        : UUID.randomUUID().toString();
+
                 EtherLog.info(
                         AgentLoop.class,
                         "Step {} - executing tool {} for session {}",
@@ -71,11 +83,36 @@ public final class AgentLoop {
                         toolRequest.toolName(),
                         context.sessionId()
                 );
-                ToolResult result = toolExecutor.execute(
-                        new ToolCall(toolRequest.toolName(), toolRequest.arguments()),
-                        context
-                );
-                context.conversationState().add(new Message(Message.Role.TOOL, renderToolResult(result)));
+
+                context.conversationState().add(new Message(
+                        Message.Role.ASSISTANT,
+                        toolRequest.toolName() + "|" + toolRequest.arguments(),
+                        callId
+                ));
+
+                ToolResult result;
+                try {
+                    result = toolExecutor.execute(
+                            new ToolCall(toolRequest.toolName(), toolRequest.arguments()),
+                            context
+                    );
+                } catch (Exception e) {
+                    String errorMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+                    EtherLog.warn(
+                            AgentLoop.class,
+                            "Step {} - tool {} failed for session {}: {}",
+                            currentStep,
+                            toolRequest.toolName(),
+                            context.sessionId(),
+                            errorMsg
+                    );
+                    context.conversationState().add(
+                            new Message(Message.Role.TOOL, "Error: " + errorMsg, callId));
+                    policyEngine.checkAfterStep(context, step);
+                    continue;
+                }
+
+                context.conversationState().add(new Message(Message.Role.TOOL, result.content(), callId));
                 policyEngine.checkAfterStep(context, step);
                 continue;
             }
@@ -86,11 +123,25 @@ public final class AgentLoop {
         throw new AgentException("Max steps exceeded without final answer");
     }
 
-    private String renderToolResult(ToolResult result) {
-        return "tool=%s success=%s content=%s".formatted(
-                result.toolName(),
-                result.success(),
-                result.content()
-        );
+    private ModelResponse callWithTimeout(ModelRequest request, Duration timeout) throws Exception {
+        Callable<ModelResponse> task = () -> modelClient.generate(request);
+        var executor = Executors.newVirtualThreadPerTaskExecutor();
+        Future<ModelResponse> future = executor.submit(task);
+        executor.shutdown();
+        try {
+            return future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            future.cancel(true);
+            Thread.currentThread().interrupt();
+            throw new AgentException("Model call interrupted");
+        } catch (TimeoutException e) {
+            future.cancel(true);
+            throw new AgentException("Model call timed out after " + timeout.toSeconds() + "s");
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException re) throw re;
+            if (cause instanceof Exception ex) throw ex;
+            throw new AgentException("Model call failed: " + cause.getMessage());
+        }
     }
 }

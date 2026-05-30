@@ -1,0 +1,4 @@
+# Artefactos del parent pom Maven
+target/
+.flattened-pom.xml
+dependency-reduced-pom.xml

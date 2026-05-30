@@ -26,7 +26,7 @@
         <dependency>
             <groupId>dev.rafex.ether.logging</groupId>
             <artifactId>ether-logging-core</artifactId>
-            <!-- version managed by ether-parent dependencyManagement -->
+            <version>${ether-logging-core.version}</version>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>

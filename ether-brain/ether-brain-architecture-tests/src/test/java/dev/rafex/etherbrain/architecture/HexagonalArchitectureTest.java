@@ -18,5 +18,10 @@ class HexagonalArchitectureTest {
             noClasses()
                     .that().resideInAPackage("..core..")
                     .should().dependOnClassesThat()
-                    .resideInAnyPackage("..infra..", "..tools.local..", "..cli..", "..bootstrap..");
+                    .resideInAnyPackage(
+                            "..infra..",
+                            "..tools.local..",
+                            "..tools.remote..",
+                            "..cli..",
+                            "..bootstrap..");
 }
