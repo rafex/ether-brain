@@ -14,24 +14,40 @@ Guia de operacion de EtherBrain. Lee esto antes de ejecutar el runtime.
 
 ## Variables de entorno
 
+Cuatro variables. Solo hay dos tipos de API LLM en el mercado.
+
 | Variable | Valores | Default | Descripcion |
 |---|---|---|---|
-| `MODEL_PROVIDER` | `anthropic` \| `openai` \| `openai-compatible` \| `demo` | `demo` | Proveedor de modelo |
-| `MODEL_NAME` | cualquier string | segun proveedor | Identificador del modelo |
-| `ANTHROPIC_API_KEY` | `sk-ant-...` | — | Requerida cuando `MODEL_PROVIDER=anthropic` |
-| `OPENAI_API_KEY` | `sk-...` | — | Requerida cuando `MODEL_PROVIDER=openai` o `openai-compatible` |
-| `OPENAI_BASE_URL` | URL completa | — | Requerida cuando `MODEL_PROVIDER=openai-compatible` |
-| `SESSION_DIR` | ruta de directorio | (en memoria) | Si se define, las sesiones se persisten como JSON en esa ruta |
-| `LOG_LEVEL` | `OFF` \| `SEVERE` \| `WARNING` \| `INFO` \| `FINE` \| `ALL` | `INFO` | Nivel de logging |
+| `LLM_URL` | URL completa | — | Endpoint del proveedor |
+| `LLM_TOKEN` | string | `""` | API key / token (vacio para Ollama local) |
+| `LLM_MODEL` | string | — | Nombre del modelo |
+| `LLM_TYPE` | `anthropic` \| `openai` | `openai` | Tipo de API |
+| `SESSION_DIR` | ruta | en memoria | Directorio de sesiones persistentes |
+| `LOG_LEVEL` | `OFF`…`ALL` | `INFO` | Nivel de logging |
 
-### Defaults de modelo por proveedor
+Existen 4 formatos reales de API LLM en el mercado. `LLM_TYPE` los identifica:
 
-| Proveedor | Model default |
+| `LLM_TYPE` | Codec | Estado | Proveedores |
+|---|---|---|---|
+| `openai` (default) | `OpenAiCodec` | ✅ | OpenAI, Groq, Deepseek, Mistral, Qwen, OpenRouter, Together AI, Fireworks, Ollama, LM Studio, vLLM — cualquier `/v1/chat/completions` |
+| `anthropic` | `AnthropicCodec` | ✅ | Anthropic Claude directo o proxy que preserve el formato |
+| `gemini` | `GeminiCodec` | ✅ | Google Gemini (via generativelanguage.googleapis.com) |
+| `bedrock` | `BedrockCodec` | ✅ | AWS Bedrock (requiere SigV4 via cliente HTTP pre-configurado) |
+
+Si `LLM_TYPE` no esta definido, se intenta inferir del path de la URL como fallback.
+
+URLs de referencia por proveedor:
+
+| Proveedor | `LLM_URL` |
 |---|---|
-| `anthropic` | `claude-opus-4-5` |
-| `openai` | `gpt-4o-mini` |
-| `openai-compatible` | sin default — `MODEL_NAME` es obligatorio |
-| `demo` | sin LLM real |
+| Anthropic | `https://api.anthropic.com/v1/messages` |
+| OpenAI | `https://api.openai.com/v1/chat/completions` |
+| Groq | `https://api.groq.com/openai/v1/chat/completions` |
+| Cerebras | `https://api.cerebras.ai/v1/chat/completions` |
+| Deepseek | `https://api.deepseek.com/v1/chat/completions` |
+| Mistral | `https://api.mistral.ai/v1/chat/completions` |
+| OpenRouter | `https://openrouter.ai/api/v1/chat/completions` |
+| Ollama local | `http://localhost:11434/v1/chat/completions` |
 
 ---
 

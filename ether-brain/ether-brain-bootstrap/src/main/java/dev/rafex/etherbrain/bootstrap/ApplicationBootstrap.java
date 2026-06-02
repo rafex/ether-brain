@@ -9,16 +9,19 @@ import dev.rafex.ether.logging.core.config.LoggingConfigurator;
 import dev.rafex.etherbrain.infra.file.FileSessionStore;
 import dev.rafex.etherbrain.infra.http.HttpModelClient;
 import dev.rafex.etherbrain.infra.http.HttpModelConfig;
+import dev.rafex.etherbrain.infra.http.ProviderCodec;
 import dev.rafex.etherbrain.infra.http.codec.AnthropicCodec;
+import dev.rafex.etherbrain.infra.http.codec.BedrockCodec;
+import dev.rafex.etherbrain.infra.http.codec.GeminiCodec;
 import dev.rafex.etherbrain.infra.http.codec.OpenAiCodec;
 import dev.rafex.etherbrain.infra.memory.InMemorySessionStore;
+import dev.rafex.etherbrain.ports.auth.TokenProvider;
 import dev.rafex.etherbrain.ports.model.FinalAnswer;
 import dev.rafex.etherbrain.ports.model.Message;
 import dev.rafex.etherbrain.ports.model.ModelClient;
 import dev.rafex.etherbrain.ports.model.ModelRequest;
 import dev.rafex.etherbrain.ports.model.ModelResponse;
 import dev.rafex.etherbrain.ports.model.ToolRequest;
-import dev.rafex.etherbrain.ports.auth.TokenProvider;
 import dev.rafex.etherbrain.ports.runtime.AgentConfig;
 import dev.rafex.etherbrain.ports.runtime.RemoteServiceConfig;
 import dev.rafex.etherbrain.ports.session.SessionStore;
@@ -27,7 +30,9 @@ import dev.rafex.etherbrain.tools.local.EchoTool;
 import dev.rafex.etherbrain.tools.local.InMemoryToolRegistry;
 import dev.rafex.etherbrain.tools.remote.FaissTokenManager;
 import dev.rafex.etherbrain.tools.remote.KnowledgeSearchTool;
+import java.io.IOException;
 import java.net.URI;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -38,36 +43,75 @@ import java.util.logging.Level;
 /**
  * Assembles the EtherBrain runtime from environment variables.
  *
- * <h2>Model provider</h2>
+ * <h2>Modelo LLM — tres variables universales</h2>
  * <pre>
- * MODEL_PROVIDER    — "anthropic" | "openai" | "openai-compatible" | "demo" (default)
- * MODEL_NAME        — model identifier forwarded to the provider
- * ANTHROPIC_API_KEY — required when MODEL_PROVIDER=anthropic
- * OPENAI_API_KEY    — required when MODEL_PROVIDER=openai or openai-compatible
- * OPENAI_BASE_URL   — required when MODEL_PROVIDER=openai-compatible
+ * LLM_URL    — endpoint completo del proveedor
+ * LLM_TOKEN  — API key o token (vacío si no se requiere, ej. Ollama local)
+ * LLM_MODEL  — nombre del modelo
  * </pre>
  *
- * <h2>Knowledge base (faiss-poc)</h2>
+ * <p>El tipo de API se indica con {@code LLM_TYPE}. Existen 4 formatos reales en el mercado:
  * <pre>
- * FAISS_BASE_URL       — base URL of the faiss-poc service (e.g. https://51.161.11.83:8443)
+ * LLM_TYPE     Codec               Proveedores
+ * ──────────────────────────────────────────────────────────────────────
+ * openai       OpenAiCodec ✅      OpenAI, Groq, Deepseek, Mistral, Qwen,
+ *                                  OpenRouter, Together AI, Fireworks,
+ *                                  Ollama, LM Studio, vLLM y cualquier
+ *                                  endpoint /v1/chat/completions
+ * anthropic    AnthropicCodec ✅   Anthropic Claude (API directa o proxy)
+ * gemini       GeminiCodec ⏳      Google Gemini (pendiente de implementar)
+ * bedrock      BedrockCodec ⏳     AWS Bedrock (pendiente de implementar)
+ * </pre>
+ * <p>Si {@code LLM_TYPE} no está definido se intenta inferir del path de la URL
+ * como fallback, y si tampoco coincide se usa {@code openai} por defecto.
  *
- * Auth (choose one):
- *   FAISS_EMAIL + FAISS_PASSWORD  — auto-login + token refresh (recommended)
- *   FAISS_AUTH_TOKEN              — static JWT (expires after 60 min, no auto-refresh)
- *   FAISS_API_KEY                 — static API key (never expires)
+ * <p>Ejemplos:
+ * <pre>
+ * # Claude (Anthropic)
+ * LLM_URL=https://api.anthropic.com/v1/messages
+ * LLM_TOKEN=sk-ant-...
+ * LLM_MODEL=claude-opus-4-5
  *
- * FAISS_SKIP_TLS_VERIFY — "true" to accept self-signed certificates (default: false)
+ * # Groq
+ * LLM_URL=https://api.groq.com/openai/v1/chat/completions
+ * LLM_TOKEN=gsk_...
+ * LLM_MODEL=llama-3.3-70b-versatile
+ *
+ * # Deepseek
+ * LLM_URL=https://api.deepseek.com/v1/chat/completions
+ * LLM_TOKEN=sk-...
+ * LLM_MODEL=deepseek-chat
+ *
+ * # OpenRouter (cualquier modelo vía un solo endpoint)
+ * LLM_URL=https://openrouter.ai/api/v1/chat/completions
+ * LLM_TOKEN=sk-or-...
+ * LLM_MODEL=anthropic/claude-opus-4-5
+ *
+ * # Ollama local (sin token)
+ * LLM_URL=http://localhost:11434/v1/chat/completions
+ * LLM_MODEL=llama3.2
  * </pre>
  *
- * <h2>Session persistence</h2>
+ * <h2>Base de conocimiento (faiss-poc)</h2>
  * <pre>
- * SESSION_DIR — directory for file-backed sessions; omit for in-memory
+ * FAISS_BASE_URL      — URL del servicio faiss-poc
+ * FAISS_EMAIL         — email para login automático (+ FAISS_PASSWORD)
+ * FAISS_PASSWORD      — contraseña para login automático
+ * FAISS_AUTH_TOKEN    — token JWT estático (alternativa)
+ * FAISS_API_KEY       — API key estática (alternativa)
+ * FAISS_SKIP_TLS_VERIFY — "true" para certificados autofirmados
+ * </pre>
+ *
+ * <h2>Sesiones y logs</h2>
+ * <pre>
+ * SESSION_DIR — directorio para sesiones persistentes (omitir = en memoria)
  * LOG_LEVEL   — OFF | SEVERE | WARNING | INFO (default) | FINE | ALL
  * </pre>
  */
 public final class ApplicationBootstrap {
 
     public AgentRuntime bootstrap() {
+        loadDotEnv();         // carga .env antes de leer cualquier variable
         configureLogging();
 
         ModelClient modelClient = buildModelClient();
@@ -80,9 +124,9 @@ public final class ApplicationBootstrap {
         Set<String> enabledTools = new HashSet<>(Set.of("echo", "current_time"));
         Map<String, RemoteServiceConfig> remoteServices = new HashMap<>();
 
-        // ── faiss-poc wiring (activado si FAISS_BASE_URL está definido) ───────
-        String faissUrl      = System.getenv("FAISS_BASE_URL");
-        boolean skipTls      = "true".equalsIgnoreCase(env("FAISS_SKIP_TLS_VERIFY", "false"));
+        // ── faiss-poc (activado si FAISS_BASE_URL está definido) ─────────────
+        String faissUrl = System.getenv("FAISS_BASE_URL");
+        boolean skipTls = "true".equalsIgnoreCase(env("FAISS_SKIP_TLS_VERIFY", "false"));
 
         if (faissUrl != null && !faissUrl.isBlank()) {
             TokenProvider faissToken = buildFaissTokenProvider(faissUrl, skipTls);
@@ -92,10 +136,9 @@ public final class ApplicationBootstrap {
             } else {
                 toolRegistry.register(new KnowledgeSearchTool(faissToken, skipTls));
                 enabledTools.add("knowledge_search");
-                // baseUri se almacena en RemoteServiceConfig; el token lo gestiona TokenProvider
                 remoteServices.put(KnowledgeSearchTool.SERVICE_NAME,
                         RemoteServiceConfig.of(KnowledgeSearchTool.SERVICE_NAME, faissUrl, ""));
-                System.out.println("[EtherBrain] knowledge_search habilitado → " + faissUrl +
+                System.out.println("[EtherBrain] knowledge_search → " + faissUrl +
                         (skipTls ? " (TLS verify: OFF)" : ""));
             }
         }
@@ -121,38 +164,85 @@ public final class ApplicationBootstrap {
         return bootstrap();
     }
 
-    // ── Private helpers ───────────────────────────────────────────────────────
+    // ── Model client ──────────────────────────────────────────────────────────
 
     private static ModelClient buildModelClient() {
-        String provider = env("MODEL_PROVIDER", "demo").toLowerCase();
+        String llmUrl   = System.getenv("LLM_URL");
+        String llmToken = env("LLM_TOKEN", "");
+        String llmModel = env("LLM_MODEL", "");
 
-        return switch (provider) {
-            case "anthropic" -> {
-                String key = requireEnv("ANTHROPIC_API_KEY", "MODEL_PROVIDER=anthropic");
-                String model = env("MODEL_NAME", "claude-opus-4-5");
-                yield new HttpModelClient(HttpModelConfig.anthropic(key, model), new AnthropicCodec());
-            }
-            case "openai" -> {
-                String key = requireEnv("OPENAI_API_KEY", "MODEL_PROVIDER=openai");
-                String model = env("MODEL_NAME", "gpt-4o-mini");
-                yield new HttpModelClient(HttpModelConfig.openAi(key, model), new OpenAiCodec());
-            }
-            case "openai-compatible" -> {
-                String baseUrl = requireEnv("OPENAI_BASE_URL", "MODEL_PROVIDER=openai-compatible");
-                String key = env("OPENAI_API_KEY", "");
-                String model = requireEnv("MODEL_NAME", "MODEL_PROVIDER=openai-compatible");
-                yield new HttpModelClient(
-                        HttpModelConfig.openAiCompatible(URI.create(baseUrl), key, model),
-                        new OpenAiCodec());
-            }
-            default -> {
-                System.err.println("[EtherBrain] MODEL_PROVIDER not set or unrecognised " +
-                        "(\"" + provider + "\") — using demo client. " +
-                        "Set MODEL_PROVIDER=anthropic|openai|openai-compatible for a real LLM.");
-                yield new DemoModelClient();
-            }
-        };
+        if (llmUrl == null || llmUrl.isBlank()) {
+            System.err.println("[EtherBrain] LLM_URL no definida — modo demo (sin LLM real).");
+            return new DemoModelClient();
+        }
+        if (llmModel.isBlank()) {
+            throw new IllegalStateException(
+                    "LLM_URL está definida pero falta LLM_MODEL.");
+        }
+
+        HttpModelConfig config = new HttpModelConfig(
+                URI.create(llmUrl), llmToken, llmModel,
+                4096, java.time.Duration.ofSeconds(60));
+
+        ProviderCodec codec = resolveCodec(llmUrl);
+        String llmType = env("LLM_TYPE", "openai");
+        System.out.println("[EtherBrain] LLM → " + llmUrl +
+                " | tipo: " + llmType + " | modelo: " + llmModel);
+        return new HttpModelClient(config, codec);
     }
+
+    /**
+     * Resuelve el codec con esta cadena de prioridad:
+     * <ol>
+     *   <li>{@code LLM_TYPE} explícito (recomendado)</li>
+     *   <li>Inferencia desde el hostname de {@code LLM_URL} (fallback)</li>
+     *   <li>{@code OpenAiCodec} como default</li>
+     * </ol>
+     *
+     * <p>Valores válidos de {@code LLM_TYPE}:
+     * {@code openai} | {@code anthropic} | {@code gemini} | {@code bedrock}.
+     */
+    private static ProviderCodec resolveCodec(String llmUrl) {
+        String llmType = env("LLM_TYPE", "").toLowerCase();
+
+        // 1 — LLM_TYPE explícito
+        if (!llmType.isBlank()) {
+            return switch (llmType) {
+                case "openai"    -> new OpenAiCodec();
+                case "anthropic" -> new AnthropicCodec();
+                case "gemini"    -> new GeminiCodec();
+                case "bedrock"   -> new BedrockCodec();
+                default -> throw new IllegalArgumentException(
+                        "LLM_TYPE=\"" + llmType + "\" no reconocido. " +
+                        "Valores válidos: openai | anthropic | gemini | bedrock");
+            };
+        }
+
+        // 2 — inferencia por hostname (LLM_URL es URL base, no tiene path)
+        String host = llmUrl.toLowerCase();
+        if (host.contains("anthropic.com")) {
+            warn("LLM_TYPE no definido — inferido 'anthropic' del hostname. Añade LLM_TYPE=anthropic.");
+            return new AnthropicCodec();
+        }
+        if (host.contains("generativelanguage.googleapis.com") ||
+            host.contains("aiplatform.googleapis.com")) {
+            warn("LLM_TYPE no definido — inferido 'gemini' del hostname. Añade LLM_TYPE=gemini.");
+            return new GeminiCodec();
+        }
+        if (host.contains("amazonaws.com")) {
+            warn("LLM_TYPE no definido — inferido 'bedrock' del hostname. Añade LLM_TYPE=bedrock.");
+            return new BedrockCodec();
+        }
+
+        // 3 — default: OpenAI-compatible (cubre la mayoría del mercado)
+        return new OpenAiCodec();
+    }
+
+    private static void warn(String msg) {
+        System.err.println("[EtherBrain] AVISO: " + msg);
+    }
+
+    // ── Session store ─────────────────────────────────────────────────────────
 
     private static SessionStore buildSessionStore() {
         String dir = System.getenv("SESSION_DIR");
@@ -162,11 +252,8 @@ public final class ApplicationBootstrap {
         return new InMemorySessionStore();
     }
 
-    /**
-     * Builds the best available auth provider for faiss-poc.
-     * Priority: credentials (auto-refresh) > static JWT > static API key.
-     * Returns null if no auth is configured.
-     */
+    // ── faiss-poc auth ────────────────────────────────────────────────────────
+
     private static TokenProvider buildFaissTokenProvider(String baseUrl, boolean skipTls) {
         String email    = System.getenv("FAISS_EMAIL");
         String password = System.getenv("FAISS_PASSWORD");
@@ -174,15 +261,15 @@ public final class ApplicationBootstrap {
             System.out.println("[EtherBrain] faiss-poc auth: login automático (" + email + ")");
             return new FaissTokenManager(URI.create(baseUrl), email, password, skipTls);
         }
-
         String staticToken = env("FAISS_AUTH_TOKEN", System.getenv("FAISS_API_KEY"));
         if (staticToken != null && !staticToken.isBlank()) {
             System.out.println("[EtherBrain] faiss-poc auth: token estático");
             return () -> staticToken;
         }
-
         return null;
     }
+
+    // ── Logging ───────────────────────────────────────────────────────────────
 
     private static void configureLogging() {
         String level = env("LOG_LEVEL", "INFO");
@@ -193,22 +280,104 @@ public final class ApplicationBootstrap {
         }
     }
 
+    // ── .env loader ──────────────────────────────────────────────────────────
+
+    /**
+     * Carga un archivo {@code .env} en {@code System.setProperty()}.
+     *
+     * <p>Prioridad: variables de entorno reales del SO siempre ganan sobre
+     * las del archivo. El archivo es solo un fallback para desarrollo local.
+     *
+     * <p>Ubicaciones buscadas en orden:
+     * <ol>
+     *   <li>Variable {@code ENV_FILE} — ruta explícita al archivo</li>
+     *   <li>{@code .env} en el directorio de trabajo actual</li>
+     *   <li>{@code ../.env} (útil cuando se ejecuta desde un submódulo Maven)</li>
+     * </ol>
+     *
+     * <p>Formato del archivo:
+     * <pre>
+     * # comentario
+     * LLM_TYPE=anthropic
+     * LLM_URL=https://api.anthropic.com/v1/messages
+     * LLM_TOKEN=sk-ant-...
+     * LLM_MODEL=claude-haiku-4-5
+     * </pre>
+     */
+    public static void loadDotEnv() {
+        Path envFile = resolveEnvFile();
+        if (envFile == null) return;
+
+        try {
+            int loaded = 0;
+            for (String line : Files.readAllLines(envFile)) {
+                line = line.strip();
+                if (line.isEmpty() || line.startsWith("#")) continue;
+
+                int eq = line.indexOf('=');
+                if (eq <= 0) continue;
+
+                String key   = line.substring(0, eq).strip();
+                String value = line.substring(eq + 1).strip();
+
+                // Quitar comillas opcionales: "valor" o 'valor'
+                if (value.length() >= 2 &&
+                    ((value.startsWith("\"") && value.endsWith("\"")) ||
+                     (value.startsWith("'")  && value.endsWith("'")))) {
+                    value = value.substring(1, value.length() - 1);
+                }
+
+                // Las variables reales del SO tienen prioridad
+                if (System.getenv(key) == null) {
+                    System.setProperty(key, value);
+                    loaded++;
+                }
+            }
+            if (loaded > 0) {
+                System.out.println("[EtherBrain] .env cargado: " + envFile +
+                        " (" + loaded + " variables)");
+            }
+        } catch (IOException e) {
+            System.err.println("[EtherBrain] No se pudo leer .env: " + envFile + " — " + e.getMessage());
+        }
+    }
+
+    private static Path resolveEnvFile() {
+        // 1. ENV_FILE explícito
+        String explicit = System.getenv("ENV_FILE");
+        if (explicit != null && !explicit.isBlank()) {
+            Path p = Path.of(explicit);
+            if (Files.exists(p)) return p;
+            System.err.println("[EtherBrain] ENV_FILE definido pero no existe: " + p);
+            return null;
+        }
+        // 2. .env en el directorio actual
+        Path cwd = Path.of(".env");
+        if (Files.exists(cwd)) return cwd;
+        // 3. ../.env (cuando se ejecuta desde un submódulo Maven)
+        Path parent = Path.of("../.env");
+        if (Files.exists(parent)) return parent;
+        return null;
+    }
+
+    // ── Env helpers ───────────────────────────────────────────────────────────
+
+    /**
+     * Lee una variable de entorno. Orden de prioridad:
+     * <ol>
+     *   <li>Variable real del SO ({@code System.getenv})</li>
+     *   <li>Propiedad del sistema ({@code System.getProperty}) — cargada desde {@code .env}</li>
+     *   <li>{@code defaultValue}</li>
+     * </ol>
+     */
     private static String env(String name, String defaultValue) {
         String value = System.getenv(name);
+        if (value != null && !value.isBlank()) return value;
+        value = System.getProperty(name);
         return (value != null && !value.isBlank()) ? value : defaultValue;
     }
 
-    private static String requireEnv(String name, String context) {
-        String value = System.getenv(name);
-        if (value == null || value.isBlank()) {
-            throw new IllegalStateException(
-                    "Missing required environment variable '" + name +
-                    "' (needed when " + context + ")");
-        }
-        return value;
-    }
-
-    // ── Demo client (no real LLM) ─────────────────────────────────────────────
+    // ── Demo client (sin LLM real) ────────────────────────────────────────────
 
     static final class DemoModelClient implements ModelClient {
 

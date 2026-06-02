@@ -69,6 +69,56 @@ Registrar una decision cuando cambie:
   mejor observabilidad.
 - Reemplaza: `none`
 
+### DEC-0009 - Tres variables de entorno universales para el LLM
+
+- Fecha: 2026-05-30
+- Estado: accepted
+- Contexto: el bootstrap tenia MODEL_PROVIDER con un switch y variables
+  distintas por proveedor (ANTHROPIC_API_KEY, OPENAI_API_KEY, GROQ_API_KEY,
+  etc.). Cada nuevo proveedor requeria un case nuevo. Era complejidad
+  artificial porque el codec se puede deducir de la URL.
+- Decision: reemplazar todas las variables de proveedor por tres universales:
+  LLM_URL (endpoint), LLM_TOKEN (api key) y LLM_MODEL (nombre del modelo).
+  El codec se detecta de la URL: si contiene "anthropic.com" se usa
+  AnthropicCodec, cualquier otra URL usa OpenAiCodec.
+- Consecuencias: agregar un nuevo proveedor OpenAI-compatible requiere cero
+  cambios de codigo — solo cambiar LLM_URL. La configuracion es identica
+  para Groq, Deepseek, Mistral, OpenRouter, Ollama o cualquier servidor local.
+- Reemplaza: `none`
+
+### DEC-0008 - HttpModelConfig con extraHeaders y maxTokens configurable
+
+- Fecha: 2026-05-30
+- Estado: accepted
+- Contexto: algunos proveedores requieren headers HTTP adicionales
+  (OpenRouter necesita HTTP-Referer/X-Title; Anthropic usa anthropic-beta
+  para features experimentales). El maxTokens fijo en 1024 era demasiado
+  pequeno para respuestas reales.
+- Decision: agregar `extraHeaders: Map<String,String>` a `HttpModelConfig`
+  con constructor backward-compatible y metodos fluidos `withExtraHeaders()`
+  y `withMaxTokens()`. Subir default de maxTokens a 4096.
+- Consecuencias: cualquier header proveedor-especifico se configura sin
+  tocar los codecs ni el dominio.
+- Reemplaza: `none`
+
+### DEC-0007 - Un codec por formato de API, no por proveedor
+
+- Fecha: 2026-05-30
+- Estado: accepted
+- Contexto: el mercado de LLMs tiene docenas de proveedores pero exactamente
+  4 formatos de API distintos:
+    openai     — el estandar de facto adoptado por la mayoria
+    anthropic  — formato propio de Claude
+    gemini     — formato propio de Google Gemini
+    bedrock    — wrapping de AWS con firma SigV4
+- Decision: un codec por formato, identificado por `LLM_TYPE`. Se han
+  implementado los 4 codecs: `openai` (OpenAiCodec), `anthropic` (AnthropicCodec),
+  `gemini` (GeminiCodec), y `bedrock` (BedrockCodec).
+- Consecuencias: agregar cualquier proveedor OpenAI-compatible requiere
+  cero cambios de codigo. Solo se necesita un codec nuevo cuando el formato
+  de la API es genuinamente distinto (Gemini, Bedrock).
+- Reemplaza: `none`
+
 ### DEC-0006 - Jackson en modulos infra HTTP y file
 
 - Fecha: 2026-05-29

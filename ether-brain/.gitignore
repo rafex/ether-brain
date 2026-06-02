@@ -2,3 +2,8 @@
 target/
 .flattened-pom.xml
 dependency-reduced-pom.xml
+
+# Configuración local — nunca subir al repo
+.env
+*.env
+!.env.example
