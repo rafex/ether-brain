@@ -1,6 +1,13 @@
 # ── Secretos y credenciales ──────────────────────────────────────────────────
+# Archivos con credenciales reales — NUNCA versionar
 .env
-.env.*
+.env.local
+.env.production
+.env.staging
+.env.development
+# Excluir explícitamente los archivos seguros que SÍ se versionan
+!.env.example
+!.env.sh
 *.key
 *.pem
 *.p12
