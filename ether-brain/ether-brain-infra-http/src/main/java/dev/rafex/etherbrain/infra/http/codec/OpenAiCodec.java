@@ -69,12 +69,24 @@ public final class OpenAiCodec implements ProviderCodec {
     }
 
     /**
-     * Construye el endpoint completo. Si la URL base ya incluye el path
-     * lo usa tal cual (retrocompatibilidad con configuraciones antiguas).
+     * Construye el endpoint completo a partir de la URL base del proveedor.
+     *
+     * <p>Casos manejados:
+     * <pre>
+     * https://api.cerebras.ai              → .../v1/chat/completions
+     * https://api.cerebras.ai/v1           → .../v1/chat/completions   (sin doble /v1)
+     * https://api.cerebras.ai/v1/chat/completions → tal cual (retrocompat)
+     * https://my-proxy.com/openai          → .../openai/v1/chat/completions
+     * </pre>
      */
     static String endpoint(HttpModelConfig config) {
         String base = config.endpoint().toString().replaceAll("/+$", "");
-        return base.contains("/chat/completions") ? base : base + API_PATH;
+        // Ya tiene el path completo
+        if (base.contains("/chat/completions")) return base;
+        // Termina en /v1 — solo añadir el sufijo sin duplicar la versión
+        if (base.endsWith("/v1")) return base + "/chat/completions";
+        // URL base pura — añadir el path completo
+        return base + API_PATH;
     }
 
     @Override

@@ -114,7 +114,9 @@ public final class ApplicationBootstrap {
         loadDotEnv();         // carga .env antes de leer cualquier variable
         configureLogging();
 
-        ModelClient modelClient = buildModelClient();
+        // LLM_TIMEOUT_SECONDS — leído aquí para pasar a ModelClient y AgentConfig
+        long timeoutSecs0 = parseLong(env("LLM_TIMEOUT_SECONDS", "60"), 60);
+        ModelClient modelClient = buildModelClient(java.time.Duration.ofSeconds(timeoutSecs0));
         SessionStore sessionStore = buildSessionStore();
 
         InMemoryToolRegistry toolRegistry = new InMemoryToolRegistry()
@@ -134,7 +136,8 @@ public final class ApplicationBootstrap {
                 System.err.println("[EtherBrain] FAISS_BASE_URL definido pero sin credenciales. " +
                         "Configura FAISS_EMAIL+FAISS_PASSWORD, FAISS_AUTH_TOKEN o FAISS_API_KEY.");
             } else {
-                toolRegistry.register(new KnowledgeSearchTool(faissToken, skipTls));
+                String defaultNs = env("FAISS_DEFAULT_NAMESPACE", null);
+                toolRegistry.register(new KnowledgeSearchTool(faissToken, skipTls, defaultNs));
                 enabledTools.add("knowledge_search");
                 remoteServices.put(KnowledgeSearchTool.SERVICE_NAME,
                         RemoteServiceConfig.of(KnowledgeSearchTool.SERVICE_NAME, faissUrl, ""));
@@ -143,9 +146,18 @@ public final class ApplicationBootstrap {
             }
         }
 
-        AgentConfig agentConfig = AgentConfig.defaults(
+        // AGENT_SYSTEM_PROMPT — system prompt personalizado (opcional)
+        String systemPrompt = env("AGENT_SYSTEM_PROMPT", AgentConfig.DEFAULT_SYSTEM_PROMPT);
+
+        int maxSteps = (int) parseLong(env("AGENT_MAX_STEPS", "8"), 8);
+        java.time.Duration timeout = java.time.Duration.ofSeconds(
+                parseLong(env("LLM_TIMEOUT_SECONDS", "60"), 60));
+
+        AgentConfig agentConfig = new AgentConfig(
+                maxSteps, timeout,
                 Set.copyOf(enabledTools),
-                Map.copyOf(remoteServices));
+                Map.copyOf(remoteServices),
+                systemPrompt);
 
         AgentLoop agentLoop = new AgentLoop(
                 modelClient,
@@ -166,7 +178,7 @@ public final class ApplicationBootstrap {
 
     // ── Model client ──────────────────────────────────────────────────────────
 
-    private static ModelClient buildModelClient() {
+    private static ModelClient buildModelClient(java.time.Duration timeout) {
         String llmUrl   = System.getenv("LLM_URL");
         String llmToken = env("LLM_TOKEN", "");
         String llmModel = env("LLM_MODEL", "");
@@ -180,9 +192,9 @@ public final class ApplicationBootstrap {
                     "LLM_URL está definida pero falta LLM_MODEL.");
         }
 
+        // timeout unificado: mismo valor para HTTP y para el Future del loop
         HttpModelConfig config = new HttpModelConfig(
-                URI.create(llmUrl), llmToken, llmModel,
-                4096, java.time.Duration.ofSeconds(60));
+                URI.create(llmUrl), llmToken, llmModel, 4096, timeout);
 
         ProviderCodec codec = resolveCodec(llmUrl);
         String llmType = env("LLM_TYPE", "openai");
@@ -246,10 +258,14 @@ public final class ApplicationBootstrap {
 
     private static SessionStore buildSessionStore() {
         String dir = System.getenv("SESSION_DIR");
-        if (dir != null && !dir.isBlank()) {
-            return new FileSessionStore(Path.of(dir));
-        }
-        return new InMemorySessionStore();
+        if (dir == null || dir.isBlank()) return new InMemorySessionStore();
+
+        // SESSION_TTL_HOURS — horas de vida de una sesión (0 = sin límite)
+        long ttlHours = parseLong(env("SESSION_TTL_HOURS", "0"), 0);
+        java.time.Duration ttl = ttlHours > 0
+                ? java.time.Duration.ofHours(ttlHours)
+                : FileSessionStore.NO_TTL;
+        return new FileSessionStore(Path.of(dir), ttl);
     }
 
     // ── faiss-poc auth ────────────────────────────────────────────────────────
@@ -370,6 +386,10 @@ public final class ApplicationBootstrap {
      *   <li>{@code defaultValue}</li>
      * </ol>
      */
+    private static long parseLong(String value, long fallback) {
+        try { return Long.parseLong(value); } catch (NumberFormatException e) { return fallback; }
+    }
+
     private static String env(String name, String defaultValue) {
         String value = System.getenv(name);
         if (value != null && !value.isBlank()) return value;

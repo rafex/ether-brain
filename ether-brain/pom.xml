@@ -56,6 +56,7 @@
         <module>ether-brain-tools-remote</module>
         <module>ether-brain-bootstrap</module>
         <module>ether-brain-transport-cli</module>
+        <module>ether-brain-transport-http</module>
         <module>ether-brain-architecture-tests</module>
     </modules>
 

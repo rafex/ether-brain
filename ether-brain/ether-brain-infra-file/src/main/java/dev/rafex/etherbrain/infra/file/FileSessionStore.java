@@ -10,6 +10,9 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -20,22 +23,42 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  *
  * <p>Thread-safe: concurrent reads on the same session are allowed; writes
  * are exclusive per session.
+ *
+ * <p>TTL: si se configura {@code maxAge}, las sesiones más antiguas que ese
+ * intervalo se tratan como nuevas (el archivo no se elimina pero se ignora).
+ * Configurar via {@code SESSION_TTL_HOURS} en el entorno o con el constructor
+ * de dos argumentos.
  */
 public final class FileSessionStore implements SessionStore {
 
+    /** Sin TTL — sesiones viven indefinidamente. */
+    public static final Duration NO_TTL = Duration.ZERO;
+
     private final Path baseDir;
+    private final Duration maxAge;
     private final ObjectMapper mapper;
     private final ConcurrentHashMap<String, ReentrantReadWriteLock> locks =
             new ConcurrentHashMap<>();
 
+    /** Crea un store sin TTL (sesiones permanentes). */
     public FileSessionStore(Path baseDir) {
+        this(baseDir, NO_TTL);
+    }
+
+    /**
+     * Crea un store con TTL opcional.
+     *
+     * @param maxAge duración máxima de una sesión; {@link #NO_TTL} para sin límite
+     */
+    public FileSessionStore(Path baseDir, Duration maxAge) {
         try {
             Files.createDirectories(baseDir);
         } catch (IOException e) {
             throw new UncheckedIOException("Cannot create session directory: " + baseDir, e);
         }
         this.baseDir = baseDir;
-        this.mapper = new ObjectMapper();
+        this.maxAge  = maxAge == null ? NO_TTL : maxAge;
+        this.mapper  = new ObjectMapper();
     }
 
     @Override
@@ -44,7 +67,7 @@ public final class FileSessionStore implements SessionStore {
         lock.lock();
         try {
             Path file = sessionFile(sessionId);
-            if (!Files.exists(file)) {
+            if (!Files.exists(file) || isExpired(file)) {
                 return new ConversationState();
             }
             SessionFile data = mapper.readValue(file.toFile(), SessionFile.class);
@@ -79,6 +102,17 @@ public final class FileSessionStore implements SessionStore {
 
     private Path sessionFile(String sessionId) {
         return baseDir.resolve(sessionId + ".json");
+    }
+
+    /** Devuelve {@code true} si el archivo supera el TTL configurado. */
+    private boolean isExpired(Path file) {
+        if (maxAge.isZero()) return false;        // sin TTL
+        try {
+            FileTime lastModified = Files.getLastModifiedTime(file);
+            return lastModified.toInstant().plus(maxAge).isBefore(Instant.now());
+        } catch (IOException e) {
+            return false;                          // si no se puede leer, no expira
+        }
     }
 
     private ReentrantReadWriteLock lockFor(String sessionId) {

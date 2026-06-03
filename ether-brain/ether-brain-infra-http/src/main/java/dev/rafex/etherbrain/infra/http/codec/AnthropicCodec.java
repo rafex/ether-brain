@@ -63,12 +63,18 @@ public final class AnthropicCodec implements ProviderCodec {
     }
 
     /**
-     * Construye el endpoint completo. Si la URL ya incluye el path lo usa
-     * tal cual (retrocompatibilidad).
+     * Construye el endpoint completo a partir de la URL base del proveedor.
+     * <pre>
+     * https://api.anthropic.com        → .../v1/messages
+     * https://api.anthropic.com/v1     → .../v1/messages   (sin doble /v1)
+     * https://api.anthropic.com/v1/messages → tal cual (retrocompat)
+     * </pre>
      */
     static String endpoint(HttpModelConfig config) {
         String base = config.endpoint().toString().replaceAll("/+$", "");
-        return base.contains("/messages") ? base : base + API_PATH;
+        if (base.contains("/messages"))  return base;
+        if (base.endsWith("/v1"))        return base + "/messages";
+        return base + API_PATH;
     }
 
     @Override

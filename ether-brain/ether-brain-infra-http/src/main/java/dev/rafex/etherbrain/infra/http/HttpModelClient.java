@@ -26,7 +26,8 @@ public final class HttpModelClient implements ModelClient {
     public ModelResponse generate(ModelRequest request) {
         try {
             var httpRequest = codec.buildHttpRequest(request, config);
-            LOG.log(System.Logger.Level.INFO, "Calling provider at {0}", config.endpoint());
+            // Loguear la URI real del request, no la URL base de config
+            LOG.log(System.Logger.Level.INFO, "Calling provider at {0}", httpRequest.uri());
 
             var httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
 

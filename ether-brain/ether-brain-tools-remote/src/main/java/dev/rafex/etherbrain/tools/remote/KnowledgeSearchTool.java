@@ -48,17 +48,30 @@ public final class KnowledgeSearchTool implements Tool {
 
     private final TokenProvider tokenProvider;
     private final boolean skipTlsVerify;
+    /** Namespace usado cuando el modelo no especifica uno. Null = obligatorio. */
+    private final String defaultNamespace;
     private final ObjectMapper mapper = new ObjectMapper();
     private final HttpClient httpClient;
 
     /**
-     * @param tokenProvider auth token source (static or dynamic)
-     * @param skipTlsVerify {@code true} to accept self-signed certificates
+     * @param tokenProvider    auth token source (static or dynamic)
+     * @param skipTlsVerify    {@code true} to accept self-signed certificates
+     * @param defaultNamespace namespace por defecto si el modelo no proporciona uno;
+     *                         {@code null} o vacío para requerir que el modelo lo especifique
      */
-    public KnowledgeSearchTool(TokenProvider tokenProvider, boolean skipTlsVerify) {
-        this.tokenProvider = tokenProvider;
-        this.skipTlsVerify = skipTlsVerify;
+    public KnowledgeSearchTool(TokenProvider tokenProvider,
+                                boolean skipTlsVerify,
+                                String defaultNamespace) {
+        this.tokenProvider    = tokenProvider;
+        this.skipTlsVerify    = skipTlsVerify;
+        this.defaultNamespace = (defaultNamespace != null && !defaultNamespace.isBlank())
+                ? defaultNamespace : null;
         this.httpClient = buildHttpClient(skipTlsVerify);
+    }
+
+    /** Backward-compatible: sin namespace por defecto. */
+    public KnowledgeSearchTool(TokenProvider tokenProvider, boolean skipTlsVerify) {
+        this(tokenProvider, skipTlsVerify, null);
     }
 
     @Override
@@ -68,12 +81,20 @@ public final class KnowledgeSearchTool implements Tool {
 
     @Override
     public String description() {
-        return "Searches the knowledge base for content semantically similar to the query. " +
-               "Use this before answering questions that require specific knowledge or facts.";
+        String base = "Searches the knowledge base for content semantically similar to the query. " +
+                      "Use this before answering questions that require specific knowledge or facts.";
+        return defaultNamespace != null
+                ? base + " Default namespace: \"" + defaultNamespace + "\"."
+                : base;
     }
 
     @Override
     public String inputSchema() {
+        // Si hay namespace por defecto, no es obligatorio en el schema
+        boolean namespaceRequired = defaultNamespace == null;
+        String defaultHint = defaultNamespace != null
+                ? ", \"default\": \"" + defaultNamespace + "\""
+                : "";
         return """
                 {
                   "type": "object",
@@ -84,15 +105,19 @@ public final class KnowledgeSearchTool implements Tool {
                     },
                     "namespace": {
                       "type": "string",
-                      "description": "Knowledge base namespace to search in"
+                      "description": "Knowledge base namespace to search in"\
+                """ + defaultHint + """
+
                     },
                     "limit": {
                       "type": "integer",
-                      "description": "Maximum number of results (1–20)",
+                      "description": "Maximum number of results (1-20)",
                       "default": 5
                     }
                   },
-                  "required": ["query", "namespace"]
+                  "required": [\
+                """ + (namespaceRequired ? "\"query\", \"namespace\"" : "\"query\"") + """
+                ]
                 }
                 """;
     }
@@ -101,14 +126,18 @@ public final class KnowledgeSearchTool implements Tool {
     public ToolResult execute(String arguments, ExecutionContext context) throws Exception {
         JsonNode args = mapper.readTree(arguments);
         String query     = args.path("query").asText();
-        String namespace = args.path("namespace").asText();
+        String namespace = args.path("namespace").isMissingNode() || args.path("namespace").asText().isBlank()
+                ? defaultNamespace
+                : args.path("namespace").asText();
         int    limit     = args.path("limit").isMissingNode() ? 5 : args.path("limit").asInt(5);
 
         if (query.isBlank()) {
             return new ToolResult(name(), false, "Error: query must not be blank");
         }
-        if (namespace.isBlank()) {
-            return new ToolResult(name(), false, "Error: namespace must not be blank");
+        if (namespace == null || namespace.isBlank()) {
+            return new ToolResult(name(), false,
+                    "Error: namespace is required. " +
+                    "Specify it in the call or set FAISS_DEFAULT_NAMESPACE.");
         }
 
         RemoteServiceConfig cfg = context.agentConfig()

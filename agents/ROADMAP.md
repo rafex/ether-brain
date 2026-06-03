@@ -9,31 +9,51 @@ Dar contexto de prioridad sin convertir esto en una lista de tickets.
 ## Hecho
 
 - Contratos del runtime base: mensajes, requests, responses y tool calls.
-- Loop de un solo agente con maximo de pasos y recuperacion de errores
-  de tool.
-- Tools locales de prueba y almacenamiento en memoria.
+- Loop de un solo agente con maximo de pasos y recuperacion de errores de tool.
+- Tools locales: `EchoTool`, `CurrentTimeTool`.
 - Trazas simples y politicas minimas de seguridad.
-- `HttpModelClient` agnostico con `AnthropicCodec` y `OpenAiCodec`.
-- `FileSessionStore` para sesiones persistentes en JSON.
+- `HttpModelClient` agnostico con los 4 codecs del mercado:
+  - `OpenAiCodec` — cubre OpenAI, Groq, Deepseek, Mistral, Cerebras, OpenRouter, Ollama y cualquier `/v1/chat/completions`
+  - `AnthropicCodec` — Anthropic Claude
+  - `GeminiCodec` — Google Gemini
+  - `BedrockCodec` — AWS Bedrock
+- `FileSessionStore` para sesiones persistentes en JSON con RW locks.
 - `ConversationState` con ventana de mensajes configurable.
 - `AgentConfig` con `RemoteServiceConfig` para servicios externos.
-- `ApplicationBootstrap` listo con env vars (`MODEL_PROVIDER`, API keys,
-  `SESSION_DIR`).
+- `ApplicationBootstrap` con 4 variables universales: `LLM_TYPE`, `LLM_URL`, `LLM_TOKEN`, `LLM_MODEL`.
+- Loader de `.env` automatico en el bootstrap.
+- `LLM_URL` es URL base — cada codec construye el path correcto.
 - CLI con REPL interactivo y flag `--session`.
 - `modelTimeout` aplicado en el loop con virtual threads.
-- Documentacion operativa: `OPERATIONS.md` y `COMMANDS.md`.
+- `KnowledgeSearchTool` con autenticacion JWT automatica contra faiss-poc.
+- `FaissTokenManager` con refresh proactivo (90s antes de expirar) y reintento en 401.
+- `TokenProvider` como puerto generico de autenticacion.
+- Documentacion operativa: `OPERATIONS.md`, `COMMANDS.md`, `docs/`.
+- **Primera integracion real con LLM validada** — Cerebras gpt-oss-120b:
+  - Respuesta simple: OK
+  - Sesion persistente entre procesos: OK
+  - Tool call `current_time`: OK
+  - (ver `docs/integracion-llm.md`)
+
+- `systemPrompt` configurable via `AGENT_SYSTEM_PROMPT` env var.
+- `modelTimeout` sincronizado con `HttpModelConfig` via `LLM_TIMEOUT_SECONDS`.
+- `AGENT_MAX_STEPS` configurable via env var.
+- TTL de sesiones en `FileSessionStore` via `SESSION_TTL_HOURS`.
+- `ether-brain-transport-http` — API HTTP REST con `com.sun.net.httpserver`.
+- CI/CD con GitHub Actions (`.github/workflows/ci.yml`).
+- Tests de `GeminiCodec` (7) y `BedrockCodec` (6).
+- Tests de `HttpAgentServer.extractMessage` (6).
 
 ## Ahora
 
-- Tests de integracion del loop completo con proveedor real (smoke test).
-- Registrar `KnowledgeSearchTool` en bootstrap cuando faiss-poc este
-  disponible en el VPS.
+- Probar `ether-brain-transport-http` con un cliente HTTP real.
+- Estrategia de resumen de historial cuando el contexto es largo.
 
 ## Despues
 
-- Pruebas de integracion del loop completo con modelo real.
-- Estrategia de resumen de historial cuando el contexto es largo.
-- `ether-brain-transport-http` para exponer el runtime como API HTTP.
+- Prueba de tool calls explícitos (que el modelo invoque `current_time`).
+- Conectar faiss-poc end-to-end con `knowledge_search`.
+- Observabilidad: metricas de latencia por step.
 
 ## Mas adelante
 

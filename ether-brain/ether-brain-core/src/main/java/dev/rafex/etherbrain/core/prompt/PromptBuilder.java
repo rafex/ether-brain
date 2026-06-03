@@ -15,15 +15,9 @@ public final class PromptBuilder {
                 .toList();
 
         return new ModelRequest(
-                systemInstructions(),
+                context.agentConfig().systemPrompt(),
                 context.conversationState().messages(),
                 tools
         );
-    }
-
-    private String systemInstructions() {
-        return "You are EtherBrain, a deterministic AI agent. " +
-               "Use the available tools when needed to answer the user's request. " +
-               "Provide clear and concise answers.";
     }
 }
