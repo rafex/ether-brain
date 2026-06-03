@@ -28,8 +28,11 @@ import dev.rafex.etherbrain.ports.session.SessionStore;
 import dev.rafex.etherbrain.tools.local.CurrentTimeTool;
 import dev.rafex.etherbrain.tools.local.EchoTool;
 import dev.rafex.etherbrain.tools.local.InMemoryToolRegistry;
+import dev.rafex.etherbrain.ports.memory.MemoryProvider;
+import dev.rafex.etherbrain.tools.remote.FaissMemoryProvider;
 import dev.rafex.etherbrain.tools.remote.FaissTokenManager;
 import dev.rafex.etherbrain.tools.remote.KnowledgeSearchTool;
+import dev.rafex.etherbrain.tools.remote.MemoryCommitTool;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
@@ -129,6 +132,7 @@ public final class ApplicationBootstrap {
         // ── faiss-poc (activado si FAISS_BASE_URL está definido) ─────────────
         String faissUrl = System.getenv("FAISS_BASE_URL");
         boolean skipTls = "true".equalsIgnoreCase(env("FAISS_SKIP_TLS_VERIFY", "false"));
+        MemoryProvider memoryProvider = null;
 
         if (faissUrl != null && !faissUrl.isBlank()) {
             TokenProvider faissToken = buildFaissTokenProvider(faissUrl, skipTls);
@@ -136,13 +140,33 @@ public final class ApplicationBootstrap {
                 System.err.println("[EtherBrain] FAISS_BASE_URL definido pero sin credenciales. " +
                         "Configura FAISS_EMAIL+FAISS_PASSWORD, FAISS_AUTH_TOKEN o FAISS_API_KEY.");
             } else {
+                // RAG — búsqueda en documentos permanentes (v1)
                 String defaultNs = env("FAISS_DEFAULT_NAMESPACE", null);
                 toolRegistry.register(new KnowledgeSearchTool(faissToken, skipTls, defaultNs));
                 enabledTools.add("knowledge_search");
                 remoteServices.put(KnowledgeSearchTool.SERVICE_NAME,
                         RemoteServiceConfig.of(KnowledgeSearchTool.SERVICE_NAME, faissUrl, ""));
-                System.out.println("[EtherBrain] knowledge_search → " + faissUrl +
-                        (skipTls ? " (TLS verify: OFF)" : ""));
+                System.out.println("[EtherBrain] knowledge_search (RAG v1) → " + faissUrl);
+
+                // Memoria de agente (v2) — scratchpad + commit a largo plazo
+                String memoryNs = env("FAISS_MEMORY_NAMESPACE",
+                                      defaultNs != null ? defaultNs : null);
+                if (memoryNs != null && !memoryNs.isBlank()) {
+                    int sessionTtl = (int) parseLong(env("FAISS_SESSION_TTL_MINUTES", "1440"), 1440);
+                    FaissMemoryProvider fmp = new FaissMemoryProvider(
+                            faissUrl, memoryNs, faissToken, skipTls, sessionTtl);
+                    memoryProvider = fmp;
+
+                    // MemoryCommitTool: el modelo decide qué promover a largo plazo
+                    toolRegistry.register(
+                            new MemoryCommitTool(faissUrl, memoryNs, faissToken, fmp, skipTls));
+                    enabledTools.add("memory_commit");
+                    System.out.println("[EtherBrain] memoria (v2) → namespace=" + memoryNs +
+                            " ttl=" + sessionTtl + "m");
+                } else {
+                    System.out.println("[EtherBrain] memoria v2 desactivada — " +
+                            "define FAISS_MEMORY_NAMESPACE para activarla");
+                }
             }
         }
 
@@ -167,7 +191,7 @@ public final class ApplicationBootstrap {
                 new DefaultPolicyEngine()
         );
 
-        return new AgentRuntime(sessionStore, agentLoop, agentConfig);
+        return new AgentRuntime(sessionStore, agentLoop, agentConfig, memoryProvider);
     }
 
     /** @deprecated Use {@link #bootstrap()} — reads configuration from environment. */

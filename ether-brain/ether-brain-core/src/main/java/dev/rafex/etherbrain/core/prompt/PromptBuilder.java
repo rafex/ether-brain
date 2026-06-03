@@ -14,10 +14,17 @@ public final class PromptBuilder {
                 .map(t -> new ToolDescriptor(t.name(), t.description(), t.inputSchema()))
                 .toList();
 
-        return new ModelRequest(
-                context.agentConfig().systemPrompt(),
-                context.conversationState().messages(),
-                tools
-        );
+        String system = context.agentConfig().systemPrompt();
+
+        // Inyectar contexto de memoria si está disponible (recuperado de MemoryProvider)
+        String memCtx = context.memoryContext();
+        if (memCtx != null && !memCtx.isBlank()) {
+            system = system +
+                    "\n\n---\n[Contexto relevante de memoria]\n" +
+                    memCtx.strip() +
+                    "\n[Fin del contexto de memoria]";
+        }
+
+        return new ModelRequest(system, context.conversationState().messages(), tools);
     }
 }
