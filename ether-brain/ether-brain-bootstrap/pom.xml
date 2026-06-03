@@ -15,6 +15,11 @@
     <dependencies>
         <dependency>
             <groupId>dev.rafex.ether.brain</groupId>
+            <artifactId>ether-brain-spi-model</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dev.rafex.ether.brain</groupId>
             <artifactId>ether-brain-core</artifactId>
             <version>${project.version}</version>
         </dependency>

@@ -1,34 +1,68 @@
 package dev.rafex.etherbrain.cli;
 
 import dev.rafex.etherbrain.bootstrap.ApplicationBootstrap;
+import dev.rafex.etherbrain.bootstrap.SpiModelBootstrap;
 import dev.rafex.etherbrain.core.runtime.AgentRuntime;
+import dev.rafex.etherbrain.spi.model.ProviderMetadata;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Scanner;
 
 /**
  * CLI entry-point for EtherBrain.
  *
- * <h2>Usage</h2>
+ * <h2>Modo estándar (ApplicationBootstrap)</h2>
  * <pre>
- * # Single turn
- * ./mvnw -pl ether-brain-transport-cli exec:java -Dexec.args="What time is it?"
+ * # Turno único
+ * java -jar ether-brain-cli.jar "¿Quién eres?"
  *
- * # Named session (single turn)
- * ./mvnw -pl ether-brain-transport-cli exec:java -Dexec.args="--session s1 What time is it?"
+ * # Sesión con nombre (persiste historial)
+ * java -jar ether-brain-cli.jar --session s1 "¿Quién eres?"
  *
- * # Interactive REPL (no args)
- * ./mvnw -pl ether-brain-transport-cli exec:java
+ * # REPL interactivo
+ * java -jar ether-brain-cli.jar
  * </pre>
  *
- * <p>Set {@code MODEL_PROVIDER}, {@code MODEL_NAME} and the matching API key
- * environment variable before running. See {@link ApplicationBootstrap} for details.
+ * <h2>Modo SPI (ServiceLoader)</h2>
+ * <pre>
+ * # Listar proveedores disponibles en classpath
+ * java -jar ether-brain-cli.jar --list-providers
+ *
+ * # Turno único con proveedor SPI explícito
+ * java -jar ether-brain-cli.jar --provider openai "¿Quién eres?"
+ * java -jar ether-brain-cli.jar --provider ollama "¿Quién eres?"
+ * </pre>
+ *
+ * <p>Configuración vía variables de entorno o {@code .env}. Ver
+ * {@link ApplicationBootstrap} y {@link SpiModelBootstrap}.
  */
 public final class Main {
 
-    private Main() {
-    }
+    private Main() {}
 
     public static void main(String[] args) throws Exception {
+
+        // ── --list-providers: listar proveedores SPI disponibles ──────────────
+        if (args.length > 0 && "--list-providers".equals(args[0])) {
+            listProviders();
+            return;
+        }
+
+        // ── --provider <name>: usar proveedor SPI explícito ───────────────────
+        if (args.length > 0 && "--provider".equals(args[0])) {
+            String provider = args.length > 1 ? args[1] : "demo";
+            String input = args.length > 2
+                    ? String.join(" ", Arrays.copyOfRange(args, 2, args.length))
+                    : "What time is it?";
+            Map<String, String> config = buildSpiConfig();
+            AgentRuntime runtime = SpiModelBootstrap.bootstrap(provider, config);
+            System.out.println(runtime.run("cli-session", input));
+            return;
+        }
+
+        // ── Modo estándar: ApplicationBootstrap con --session y REPL ─────────
         String sessionId = "cli-session";
         String[] remaining = args;
 
@@ -40,20 +74,40 @@ public final class Main {
         AgentRuntime runtime = new ApplicationBootstrap().bootstrap();
 
         if (remaining.length > 0) {
-            runSingleTurn(runtime, sessionId, String.join(" ", remaining));
+            System.out.println(runtime.run(sessionId, String.join(" ", remaining)));
         } else {
             runRepl(runtime, sessionId);
         }
     }
 
-    private static void runSingleTurn(AgentRuntime runtime, String sessionId, String input)
-            throws Exception {
-        String result = runtime.run(sessionId, input);
-        System.out.println(result);
+    // ── SPI helpers ───────────────────────────────────────────────────────────
+
+    private static void listProviders() {
+        List<ProviderMetadata> providers = SpiModelBootstrap.listProviders();
+        if (providers.isEmpty()) {
+            System.out.println("No hay proveedores SPI en el classpath.");
+            return;
+        }
+        System.out.println("Proveedores disponibles (--provider <name>):");
+        for (ProviderMetadata meta : providers) {
+            System.out.printf("  %-12s — %s%n", meta.name(), meta.description());
+        }
     }
 
+    private static Map<String, String> buildSpiConfig() {
+        Map<String, String> config = new HashMap<>();
+        System.getenv().forEach((k, v) -> {
+            if (k.startsWith("OPENAI_") || k.startsWith("OLLAMA_")) {
+                config.put(k, v);
+            }
+        });
+        return config;
+    }
+
+    // ── REPL ─────────────────────────────────────────────────────────────────
+
     private static void runRepl(AgentRuntime runtime, String sessionId) {
-        System.out.println("EtherBrain — type 'exit' to quit | session: " + sessionId);
+        System.out.println("EtherBrain — escribe 'exit' para salir | sesión: " + sessionId);
         System.out.println("─".repeat(60));
 
         try (Scanner scanner = new Scanner(System.in)) {
@@ -66,14 +120,12 @@ public final class Main {
                 if ("exit".equalsIgnoreCase(line) || "quit".equalsIgnoreCase(line)) break;
 
                 try {
-                    String result = runtime.run(sessionId, line);
-                    System.out.println(result);
+                    System.out.println(runtime.run(sessionId, line));
                 } catch (Exception e) {
                     System.err.println("[Error] " + e.getMessage());
                 }
             }
         }
-
         System.out.println("Goodbye.");
     }
 }

@@ -18,6 +18,24 @@
             <artifactId>ether-brain-bootstrap</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <dependency>
+            <groupId>dev.rafex.ether.brain</groupId>
+            <artifactId>ether-brain-infra-model-demo</artifactId>
+            <version>${project.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>dev.rafex.ether.brain</groupId>
+            <artifactId>ether-brain-infra-model-openai</artifactId>
+            <version>${project.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>dev.rafex.ether.brain</groupId>
+            <artifactId>ether-brain-infra-model-ollama</artifactId>
+            <version>${project.version}</version>
+            <scope>runtime</scope>
+        </dependency>
     </dependencies>
 
     <build>
