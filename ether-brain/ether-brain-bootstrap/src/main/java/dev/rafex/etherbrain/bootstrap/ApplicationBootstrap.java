@@ -27,6 +27,7 @@ import dev.rafex.etherbrain.ports.runtime.RemoteServiceConfig;
 import dev.rafex.etherbrain.ports.session.SessionStore;
 import dev.rafex.etherbrain.tools.local.CurrentTimeTool;
 import dev.rafex.etherbrain.tools.local.EchoTool;
+import dev.rafex.etherbrain.tools.local.ExternalToolLoader;
 import dev.rafex.etherbrain.tools.local.InMemoryToolRegistry;
 import dev.rafex.etherbrain.ports.memory.MemoryProvider;
 import dev.rafex.etherbrain.tools.remote.FaissMemoryProvider;
@@ -127,6 +128,13 @@ public final class ApplicationBootstrap {
                 .register(new CurrentTimeTool());
 
         Set<String> enabledTools = new HashSet<>(Set.of("echo", "current_time"));
+
+        // ── Tools externas (AGENT_TOOLS_FILE o tools.json en directorio actual) ──
+        int extCount = ExternalToolLoader.load(toolRegistry);
+        toolRegistry.all().stream()
+                .filter(t -> !enabledTools.contains(t.name()))
+                .filter(t -> extCount > 0)
+                .forEach(t -> enabledTools.add(t.name()));
         Map<String, RemoteServiceConfig> remoteServices = new HashMap<>();
 
         // ── faiss-poc (activado si FAISS_BASE_URL está definido) ─────────────

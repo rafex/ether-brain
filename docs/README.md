@@ -10,6 +10,7 @@ Repositorio de documentación humana del proyecto EtherBrain.
 | [arquitectura.md](arquitectura.md) | Visión general de la arquitectura hexagonal |
 | [proveedores.md](proveedores.md) | Guía de proveedores LLM soportados y sus URLs base |
 | [faiss-poc.md](faiss-poc.md) | RAG y memoria de agente con faiss-poc — configuración, upload de documentos, búsqueda semántica y memoria híbrida |
+| [tools-externas.md](tools-externas.md) | Tools externas plug-and-play — expón cualquier CLI como tool del agente con un archivo JSON, sin código Java |
 
 ## Relación con `agents/`
 

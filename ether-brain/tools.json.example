@@ -1,0 +1,23 @@
+[
+  {
+    "name": "ocr_document",
+    "description": "Extracts text from a PDF or scanned image using ether-ocr. Supports both digital PDFs (pdftotext) and scanned PDFs/images (Tesseract OCR). Returns the extracted plain text ready for RAG ingestion.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "file_path": {
+          "type": "string",
+          "description": "Absolute path to the PDF or image file (PDF, PNG, JPG, TIFF)"
+        },
+        "lang": {
+          "type": "string",
+          "description": "Tesseract language codes separated by + (default: spa+eng)",
+          "default": "spa+eng"
+        }
+      },
+      "required": ["file_path"]
+    },
+    "command": ["ether-ocr", "ocr", "${file_path}", "${__output__}", "--lang", "${lang}"],
+    "output": "file"
+  }
+]
