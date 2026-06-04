@@ -26,10 +26,12 @@ import java.util.Scanner;
  * <pre>
  * java -jar ether-brain-cli.jar upload documento.pdf --namespace mi-ns
  * java -jar ether-brain-cli.jar upload nota.md --namespace mi-ns --tags java,arch
- * java -jar ether-brain-cli.jar upload *.txt --namespace mi-ns
+ * java -jar ether-brain-cli.jar upload *.pdf --namespace mi-ns
  * </pre>
- * Formatos soportados: PDF (extracción automática), TXT, MD, y cualquier texto UTF-8.
+ * PDFs e imágenes se procesan con ether-ocr (OCR incluido).
+ * TXT, MD y demás texto UTF-8 se leen directamente.
  * Requiere: FAISS_BASE_URL, FAISS_EMAIL + FAISS_PASSWORD (o FAISS_AUTH_TOKEN).
+ * ether-ocr: ETHER_OCR_CMD o ether-ocr en PATH o python3 -m ether_ocr.
  *
  * <h2>Modo SPI (ServiceLoader)</h2>
  * <pre>

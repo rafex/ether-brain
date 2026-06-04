@@ -8,9 +8,11 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
@@ -21,15 +23,24 @@ import javax.net.ssl.X509TrustManager;
  *
  * <h2>Formatos soportados</h2>
  * <ul>
- *   <li><b>PDF</b>  — extrae texto con Apache PDFBox</li>
- *   <li><b>TXT / MD / cualquier texto UTF-8</b> — lee directamente</li>
+ *   <li><b>PDF, PNG, JPG, TIFF (escaneados)</b> — delega a {@code ether-ocr} para OCR</li>
+ *   <li><b>PDF con capa de texto</b> — delega a {@code ether-ocr} con extracción directa</li>
+ *   <li><b>TXT, MD y cualquier texto UTF-8</b> — lectura directa</li>
  * </ul>
+ *
+ * <h2>Configuración de ether-ocr</h2>
+ * La extracción se delega al comando {@code ether-ocr}. Se busca en este orden:
+ * <ol>
+ *   <li>Variable de entorno {@code ETHER_OCR_CMD} (ruta explícita)</li>
+ *   <li>{@code ether-ocr} en el PATH del sistema</li>
+ *   <li>{@code python3 -m ether_ocr} con {@code ETHER_OCR_PYTHONPATH}</li>
+ * </ol>
  *
  * <h2>Uso desde el CLI</h2>
  * <pre>
  * java -jar ether-brain-cli.jar upload --namespace mi-ns documento.pdf
  * java -jar ether-brain-cli.jar upload --namespace mi-ns --tags java,arch nota.md
- * java -jar ether-brain-cli.jar upload --namespace mi-ns *.txt
+ * java -jar ether-brain-cli.jar upload --namespace mi-ns *.pdf
  * </pre>
  */
 public final class DocumentUploader {
@@ -48,35 +59,135 @@ public final class DocumentUploader {
 
     // ── API pública ───────────────────────────────────────────────────────────
 
-    /**
-     * Sube un archivo al namespace indicado.
-     *
-     * @param file      archivo a subir (.pdf, .txt, .md, etc.)
-     * @param namespace nombre del namespace en faiss-poc
-     * @param tags      etiquetas opcionales
-     * @return respuesta del servidor (JSON)
-     */
-    /**
-     * Sube un archivo. Usa multipart/form-data (más eficiente que base64 JSON).
-     * El texto se extrae del archivo antes de enviarlo — solo texto UTF-8 llega al servidor.
-     */
     public String upload(File file, String namespace, List<String> tags) throws Exception {
         if (!file.exists()) throw new IOException("Archivo no encontrado: " + file);
 
         String text = extractText(file);
-        if (text.isBlank()) throw new IOException("El archivo no contiene texto extraíble: " + file.getName());
+        if (text.isBlank()) throw new IOException(
+                "El archivo no contiene texto extraíble: " + file.getName());
 
-        System.out.printf("[upload] %s → %d caracteres extraídos%n",
-                file.getName(), text.length());
+        System.out.printf("[upload] %s → %d caracteres%n", file.getName(), text.length());
 
-        // Multipart boundary
-        String boundary = "--------EtherBrainBoundary" + System.currentTimeMillis();
+        return sendMultipart(file.getName(), text, namespace, tags);
+    }
+
+    // ── Extracción de texto ───────────────────────────────────────────────────
+
+    /**
+     * Extrae texto del archivo.
+     * PDFs e imágenes se procesan con ether-ocr.
+     * El resto se lee directamente como UTF-8.
+     */
+    static String extractText(File file) throws Exception {
+        String name = file.getName().toLowerCase();
+        if (name.endsWith(".pdf") || name.endsWith(".png") ||
+            name.endsWith(".jpg") || name.endsWith(".jpeg") ||
+            name.endsWith(".tiff") || name.endsWith(".tif")) {
+            return extractWithOcr(file);
+        }
+        return Files.readString(file.toPath(), StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Llama a ether-ocr para extraer texto del archivo.
+     *
+     * <p>ether-ocr maneja automáticamente:
+     * <ul>
+     *   <li>PDFs con capa de texto → pdftotext (Poppler)</li>
+     *   <li>PDFs escaneados e imágenes → Tesseract OCR</li>
+     * </ul>
+     */
+    static String extractWithOcr(File file) throws Exception {
+        Path tmpOut = Files.createTempFile("etherbrain-ocr-", ".txt");
+        try {
+            List<String> cmd = buildOcrCommand(file.getAbsolutePath(),
+                                               tmpOut.toAbsolutePath().toString());
+
+            System.out.printf("[ether-ocr] %s %s%n", cmd.get(0),
+                    String.join(" ", cmd.subList(1, Math.min(cmd.size(), 5))));
+
+            ProcessBuilder pb = new ProcessBuilder(cmd);
+            pb.redirectErrorStream(true);
+            Process proc = pb.start();
+
+            String output  = new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            int    exit    = proc.waitFor();
+
+            if (exit != 0) {
+                throw new IOException(
+                        "ether-ocr terminó con código " + exit + ":\n" + output.strip());
+            }
+
+            if (!Files.exists(tmpOut)) {
+                throw new IOException("ether-ocr no generó archivo de salida. Output:\n" + output);
+            }
+
+            return Files.readString(tmpOut, StandardCharsets.UTF_8);
+
+        } finally {
+            Files.deleteIfExists(tmpOut);
+        }
+    }
+
+    /**
+     * Construye el comando para invocar ether-ocr.
+     * Prioridad: ETHER_OCR_CMD → ether-ocr en PATH → python3 -m ether_ocr.
+     */
+    static List<String> buildOcrCommand(String inputPath, String outputPath) {
+        List<String> cmd = new ArrayList<>();
+
+        String explicit = System.getenv("ETHER_OCR_CMD");
+        if (explicit != null && !explicit.isBlank()) {
+            // ETHER_OCR_CMD=/usr/local/bin/ether-ocr
+            cmd.add(explicit);
+        } else if (commandExists("ether-ocr")) {
+            cmd.add("ether-ocr");
+        } else {
+            // Fallback: python3 -m ether_ocr con PYTHONPATH opcional
+            String pythonPath = System.getenv("ETHER_OCR_PYTHONPATH");
+            ProcessBuilder pb = new ProcessBuilder("python3", "-m", "ether_ocr");
+            if (pythonPath != null && !pythonPath.isBlank()) {
+                pb.environment().put("PYTHONPATH", pythonPath);
+            }
+            cmd.add("python3");
+            cmd.add("-m");
+            cmd.add("ether_ocr");
+        }
+
+        // Usar 'ocr' que maneja ambos casos: texto directo y OCR
+        cmd.add("ocr");
+        cmd.add(inputPath);
+        cmd.add(outputPath);
+
+        // Idiomas: español + inglés por defecto, configurable
+        String lang = System.getenv().getOrDefault("ETHER_OCR_LANG", "spa+eng");
+        cmd.add("--lang");
+        cmd.add(lang);
+
+        return cmd;
+    }
+
+    private static boolean commandExists(String cmd) {
+        try {
+            Process p = new ProcessBuilder(cmd, "--help")
+                    .redirectErrorStream(true).start();
+            p.waitFor();
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    // ── HTTP multipart ────────────────────────────────────────────────────────
+
+    private String sendMultipart(String filename, String text,
+                                  String namespace, List<String> tags) throws Exception {
+        String boundary  = "--------EtherBrainBoundary" + System.currentTimeMillis();
         byte[] textBytes = text.getBytes(StandardCharsets.UTF_8);
 
-        // Construir body multipart manualmente (sin deps extra)
         String partHeader = "--" + boundary + "\r\n" +
                 "Content-Disposition: form-data; name=\"file\"; filename=\"" +
-                file.getName() + "\"\r\n" +
+                filename + "\"\r\n" +
                 "Content-Type: text/plain; charset=utf-8\r\n\r\n";
 
         StringBuilder tagParts = new StringBuilder();
@@ -87,68 +198,24 @@ public final class DocumentUploader {
         }
         String closing = "--" + boundary + "--\r\n";
 
-        byte[] header  = partHeader.getBytes(StandardCharsets.UTF_8);
-        byte[] between = "\r\n".getBytes(StandardCharsets.UTF_8);
-        byte[] tagData = tagParts.toString().getBytes(StandardCharsets.UTF_8);
-        byte[] end     = closing.getBytes(StandardCharsets.UTF_8);
-
-        // Concatenar partes
         java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
-        bos.write(header);
+        bos.write(partHeader.getBytes(StandardCharsets.UTF_8));
         bos.write(textBytes);
-        bos.write(between);
-        bos.write(tagData);
-        bos.write(end);
-        byte[] multipartBody = bos.toByteArray();
-
-        String url = baseUrl + "/api/v1/namespaces/" + namespace + "/upload/multipart";
+        bos.write("\r\n".getBytes(StandardCharsets.UTF_8));
+        bos.write(tagParts.toString().getBytes(StandardCharsets.UTF_8));
+        bos.write(closing.getBytes(StandardCharsets.UTF_8));
 
         HttpRequest req = HttpRequest.newBuilder()
-                .uri(URI.create(url))
+                .uri(URI.create(baseUrl + "/api/v1/namespaces/" + namespace + "/upload/multipart"))
                 .header("Content-Type", "multipart/form-data; boundary=" + boundary)
                 .header("Authorization", "Bearer " + token)
                 .timeout(Duration.ofSeconds(60))
-                .POST(HttpRequest.BodyPublishers.ofByteArray(multipartBody))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(bos.toByteArray()))
                 .build();
 
         HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
-
-        if (resp.statusCode() == 200 || resp.statusCode() == 201) {
-            return resp.body();
-        }
+        if (resp.statusCode() == 200 || resp.statusCode() == 201) return resp.body();
         throw new IOException("Upload falló HTTP " + resp.statusCode() + ": " + resp.body());
-    }
-
-    // ── Extracción de texto ───────────────────────────────────────────────────
-
-    /** Extrae texto del archivo según su extensión. */
-    static String extractText(File file) throws Exception {
-        String name = file.getName().toLowerCase();
-        if (name.endsWith(".pdf")) {
-            return extractPdf(file);
-        }
-        // Texto plano: txt, md, java, xml, json, yaml, csv, etc.
-        return Files.readString(file.toPath(), StandardCharsets.UTF_8);
-    }
-
-    private static String extractPdf(File file) throws Exception {
-        // Usamos PDFBox 3.x via reflexión para no forzar import si no está en classpath
-        try {
-            Class<?> loaderClass = Class.forName("org.apache.pdfbox.Loader");
-            Class<?> docClass    = Class.forName("org.apache.pdfbox.pdmodel.PDDocument");
-            Class<?> stripperClass = Class.forName("org.apache.pdfbox.text.PDFTextStripper");
-
-            Object doc      = loaderClass.getMethod("loadPDF", File.class).invoke(null, file);
-            Object stripper = stripperClass.getDeclaredConstructor().newInstance();
-            String text     = (String) stripperClass.getMethod("getText", docClass).invoke(stripper, doc);
-            docClass.getMethod("close").invoke(doc);
-            return text;
-
-        } catch (ClassNotFoundException e) {
-            throw new UnsupportedOperationException(
-                    "PDFBox no está disponible en el classpath. " +
-                    "Extrae el texto manualmente y sube el .txt resultante.", e);
-        }
     }
 
     // ── TLS ───────────────────────────────────────────────────────────────────

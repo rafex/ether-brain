@@ -36,12 +36,7 @@
             <version>${project.version}</version>
             <scope>runtime</scope>
         </dependency>
-        <!-- PDF extraction para el comando upload -->
-        <dependency>
-            <groupId>org.apache.pdfbox</groupId>
-            <artifactId>pdfbox</artifactId>
-            <version>3.0.3</version>
-        </dependency>
+        <!-- PDFBox eliminado: la extracción de PDF se delega a ether-ocr -->
     </dependencies>
 
     <build>
