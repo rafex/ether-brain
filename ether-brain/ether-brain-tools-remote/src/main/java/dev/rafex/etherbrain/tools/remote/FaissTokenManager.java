@@ -86,7 +86,7 @@ public final class FaissTokenManager implements TokenProvider {
     }
 
     private String doLogin() throws Exception {
-        String url = baseUri.toString().stripTrailing() + "/auth/token";
+        String url = baseUri.toString().stripTrailing() + "/api/v1/auth/token";
 
         String body = mapper.writeValueAsString(
                 Map.of("email", email, "password", password));

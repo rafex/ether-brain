@@ -90,7 +90,6 @@ public final class KnowledgeSearchTool implements Tool {
 
     @Override
     public String inputSchema() {
-        // Si hay namespace por defecto, no es obligatorio en el schema
         boolean namespaceRequired = defaultNamespace == null;
         String defaultHint = defaultNamespace != null
                 ? ", \"default\": \"" + defaultNamespace + "\""
@@ -113,6 +112,16 @@ public final class KnowledgeSearchTool implements Tool {
                       "type": "integer",
                       "description": "Maximum number of results (1-20)",
                       "default": 5
+                    },
+                    "use_rerank": {
+                      "type": "boolean",
+                      "description": "Use cross-encoder reranking for higher precision (slower, ~500ms extra). Use when result quality matters more than speed.",
+                      "default": false
+                    },
+                    "use_bm25": {
+                      "type": "boolean",
+                      "description": "Combine semantic search with BM25 keyword search for better recall on exact terms.",
+                      "default": false
                     }
                   },
                   "required": [\
@@ -129,7 +138,9 @@ public final class KnowledgeSearchTool implements Tool {
         String namespace = args.path("namespace").isMissingNode() || args.path("namespace").asText().isBlank()
                 ? defaultNamespace
                 : args.path("namespace").asText();
-        int    limit     = args.path("limit").isMissingNode() ? 5 : args.path("limit").asInt(5);
+        int     limit     = args.path("limit").isMissingNode() ? 5 : args.path("limit").asInt(5);
+        boolean useRerank = args.path("use_rerank").asBoolean(false);
+        boolean useBm25   = args.path("use_bm25").asBoolean(false);
 
         if (query.isBlank()) {
             return new ToolResult(name(), false, "Error: query must not be blank");
@@ -147,12 +158,13 @@ public final class KnowledgeSearchTool implements Tool {
                         "Add RemoteServiceConfig.of(\"faiss-poc\", \"https://vps:8443\", \"\") " +
                         "to AgentConfig."));
 
-        return searchWithRetry(query, namespace, limit, cfg, /* firstAttempt */ true);
+        return searchWithRetry(query, namespace, limit, useRerank, useBm25, cfg, true);
     }
 
     // ── HTTP ─────────────────────────────────────────────────────────────────
 
     private ToolResult searchWithRetry(String query, String namespace, int limit,
+                                       boolean useRerank, boolean useBm25,
                                        RemoteServiceConfig cfg,
                                        boolean firstAttempt) throws Exception {
         String token = tokenProvider.getToken();
@@ -160,11 +172,13 @@ public final class KnowledgeSearchTool implements Tool {
         String url   = base + "/api/v1/namespaces/" + namespace + "/search";
 
         String body = mapper.writeValueAsString(Map.of(
-                "query", query,
-                "k",     Math.min(limit * 2, 50),
-                "limit", limit,
-                "offset", 0,
-                "normalize_scores", true
+                "query",            query,
+                "k",                Math.min(limit * 2, 50),
+                "limit",            limit,
+                "offset",           0,
+                "normalize_scores", true,
+                "use_rerank",       useRerank,
+                "use_bm25",         useBm25
         ));
 
         HttpRequest.Builder req = HttpRequest.newBuilder()
@@ -186,7 +200,7 @@ public final class KnowledgeSearchTool implements Tool {
         if (response.statusCode() == 401 && firstAttempt) {
             // Token was rejected — invalidate and retry once
             tokenProvider.invalidate();
-            return searchWithRetry(query, namespace, limit, cfg, false);
+            return searchWithRetry(query, namespace, limit, useRerank, useBm25, cfg, false);
         }
 
         if (response.statusCode() != 200) {

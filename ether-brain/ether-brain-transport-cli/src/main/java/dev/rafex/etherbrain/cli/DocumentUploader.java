@@ -11,9 +11,7 @@ import java.nio.file.Files;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
 import java.time.Duration;
-import java.util.Base64;
 import java.util.List;
-import java.util.stream.Collectors;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
@@ -58,6 +56,10 @@ public final class DocumentUploader {
      * @param tags      etiquetas opcionales
      * @return respuesta del servidor (JSON)
      */
+    /**
+     * Sube un archivo. Usa multipart/form-data (más eficiente que base64 JSON).
+     * El texto se extrae del archivo antes de enviarlo — solo texto UTF-8 llega al servidor.
+     */
     public String upload(File file, String namespace, List<String> tags) throws Exception {
         if (!file.exists()) throw new IOException("Archivo no encontrado: " + file);
 
@@ -67,26 +69,46 @@ public final class DocumentUploader {
         System.out.printf("[upload] %s → %d caracteres extraídos%n",
                 file.getName(), text.length());
 
-        String contentB64 = Base64.getEncoder()
-                .encodeToString(text.getBytes(StandardCharsets.UTF_8));
+        // Multipart boundary
+        String boundary = "--------EtherBrainBoundary" + System.currentTimeMillis();
+        byte[] textBytes = text.getBytes(StandardCharsets.UTF_8);
 
-        String tagsJson = tags.isEmpty() ? "[]"
-                : tags.stream()
-                      .map(t -> "\"" + t.replace("\"", "\\\"") + "\"")
-                      .collect(Collectors.joining(",", "[", "]"));
+        // Construir body multipart manualmente (sin deps extra)
+        String partHeader = "--" + boundary + "\r\n" +
+                "Content-Disposition: form-data; name=\"file\"; filename=\"" +
+                file.getName() + "\"\r\n" +
+                "Content-Type: text/plain; charset=utf-8\r\n\r\n";
 
-        String body = """
-                {"filename":"%s","content":"%s","tags":%s}
-                """.formatted(file.getName(), contentB64, tagsJson).strip();
+        StringBuilder tagParts = new StringBuilder();
+        for (String tag : tags) {
+            tagParts.append("--").append(boundary).append("\r\n")
+                    .append("Content-Disposition: form-data; name=\"tags\"\r\n\r\n")
+                    .append(tag).append("\r\n");
+        }
+        String closing = "--" + boundary + "--\r\n";
 
-        String url = baseUrl + "/api/v1/namespaces/" + namespace + "/upload";
+        byte[] header  = partHeader.getBytes(StandardCharsets.UTF_8);
+        byte[] between = "\r\n".getBytes(StandardCharsets.UTF_8);
+        byte[] tagData = tagParts.toString().getBytes(StandardCharsets.UTF_8);
+        byte[] end     = closing.getBytes(StandardCharsets.UTF_8);
+
+        // Concatenar partes
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        bos.write(header);
+        bos.write(textBytes);
+        bos.write(between);
+        bos.write(tagData);
+        bos.write(end);
+        byte[] multipartBody = bos.toByteArray();
+
+        String url = baseUrl + "/api/v1/namespaces/" + namespace + "/upload/multipart";
 
         HttpRequest req = HttpRequest.newBuilder()
                 .uri(URI.create(url))
-                .header("Content-Type", "application/json")
+                .header("Content-Type", "multipart/form-data; boundary=" + boundary)
                 .header("Authorization", "Bearer " + token)
                 .timeout(Duration.ofSeconds(60))
-                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(multipartBody))
                 .build();
 
         HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());

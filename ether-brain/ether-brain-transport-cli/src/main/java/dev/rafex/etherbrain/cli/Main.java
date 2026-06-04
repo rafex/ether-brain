@@ -177,7 +177,7 @@ public final class Main {
         }
 
         var req = java.net.http.HttpRequest.newBuilder()
-                .uri(java.net.URI.create(faissUrl.replaceAll("/+$","") + "/auth/token"))
+                .uri(java.net.URI.create(faissUrl.replaceAll("/+$","") + "/api/v1/auth/token"))
                 .header("Content-Type", "application/json")
                 .timeout(java.time.Duration.ofSeconds(15))
                 .POST(java.net.http.HttpRequest.BodyPublishers.ofString(body))
