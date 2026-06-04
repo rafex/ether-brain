@@ -12,10 +12,12 @@ Estado actual del runtime y trabajo pendiente, ordenado por impacto.
 | Cancelación de loop en progreso | ✅ | Medio | `ether-brain-ports`, `ether-brain-core` |
 | Retry inteligente de tools fallidas | ✅ | Medio | `ether-brain-core` |
 | Registro de agentes (descubrimiento) | ✅ | Medio | `ether-brain-core` |
-| SSE streaming de respuestas | ✅ | Medio | `ether-brain-transport-http` |
-| Loop reactivo — trigger por eventos / webhooks | ✅ | Alto | `ether-brain-transport-http` |
-| Ejecución paralela de sub-agentes | ⏳ | Alto | `ether-brain-core` |
-| Trigger por eventos externos (cron, webhook) | ⏳ | Alto | nuevo módulo |
+| SSE streaming con eventos de progreso por step | ✅ | Medio | `ether-brain-transport-http` |
+| StepListener — progreso en tiempo real | ✅ | Medio | `ether-brain-ports`, `ether-brain-core` |
+| Loop reactivo — cola async + callback URL | ✅ | Alto | `ether-brain-transport-http` |
+| Ejecución paralela de tool calls por turno | ✅ | Alto | `ether-brain-core` (`BatchedToolRequest`) |
+| Trigger por eventos externos (Kafka, cron, SQS) | ⏳ | Alto | nuevo módulo `ether-brain-event-bus` |
+| Streaming token a token (LLM chunked/SSE) | ⏳ | Medio | `ether-brain-infra-http` (codecs) |
 
 ---
 

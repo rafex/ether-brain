@@ -5,6 +5,7 @@ import com.sun.net.httpserver.HttpServer;
 import dev.rafex.etherbrain.bootstrap.ApplicationBootstrap;
 import dev.rafex.etherbrain.core.runtime.AgentRuntime;
 import dev.rafex.etherbrain.ports.runtime.CancellationToken;
+import dev.rafex.etherbrain.ports.runtime.StepListener;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
@@ -218,11 +219,35 @@ public final class HttpAgentServer {
             // Start event
             writeEvent(out, "{\"type\":\"start\",\"sessionId\":" + jsonString(sessionId) + "}");
 
-            // Run in virtual thread to allow SSE writes
+            // Step listener: emits SSE events for each loop step
+            StepListener listener = new StepListener() {
+                @Override public void onStepStart(int step) {
+                    trySse(out, "{\"type\":\"thinking\",\"step\":" + step + "}");
+                }
+                @Override public void onToolCall(int step, String tool, String args) {
+                    trySse(out, "{\"type\":\"tool_call\",\"step\":" + step
+                            + ",\"tool\":" + jsonString(tool)
+                            + ",\"args\":" + jsonString(args) + "}");
+                }
+                @Override public void onToolResult(int step, String tool, boolean ok, String result) {
+                    trySse(out, "{\"type\":\"tool_result\",\"step\":" + step
+                            + ",\"tool\":" + jsonString(tool)
+                            + ",\"success\":" + ok
+                            + ",\"content\":" + jsonString(
+                                    result.length() > 500 ? result.substring(0, 500) + "…" : result)
+                            + "}");
+                }
+                @Override public void onFinalAnswer(String answer) { /* sent after join */ }
+                @Override public void onError(String error) {
+                    trySse(out, "{\"type\":\"error\",\"content\":" + jsonString(error) + "}");
+                }
+            };
+
+            // Run in virtual thread with step listener attached
             final String msg = message;
             Thread.ofVirtual().start(() -> {
                 try {
-                    String answer = runtime.run(sessionId, msg, token);
+                    String answer = runtime.run(sessionId, msg, token, listener);
                     try {
                         writeEvent(out, "{\"type\":\"answer\",\"content\":" + jsonString(answer) + "}");
                         writeEvent(out, "{\"type\":\"done\"}");
@@ -251,6 +276,11 @@ public final class HttpAgentServer {
         String sseFrame = "data: " + data + "\n\n";
         out.write(sseFrame.getBytes(StandardCharsets.UTF_8));
         out.flush();
+    }
+
+    /** Write an SSE event, silently dropping it if the client disconnected. */
+    private static void trySse(OutputStream out, String data) {
+        try { writeEvent(out, data); } catch (IOException ignored) {}
     }
 
     // ── Cancellation ──────────────────────────────────────────────────────────

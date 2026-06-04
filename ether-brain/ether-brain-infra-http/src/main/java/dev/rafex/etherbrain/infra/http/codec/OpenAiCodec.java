@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import dev.rafex.etherbrain.infra.http.HttpModelConfig;
 import dev.rafex.etherbrain.infra.http.ProviderCodec;
+import dev.rafex.etherbrain.ports.model.BatchedToolRequest;
 import dev.rafex.etherbrain.ports.model.FinalAnswer;
 import dev.rafex.etherbrain.ports.model.Message;
 import dev.rafex.etherbrain.ports.model.ModelRequest;
@@ -14,6 +15,8 @@ import dev.rafex.etherbrain.ports.model.ToolDescriptor;
 import dev.rafex.etherbrain.ports.model.ToolRequest;
 import java.net.http.HttpRequest;
 import java.net.http.HttpRequest.BodyPublishers;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * OpenAI-compatible codec. Works with any provider that exposes
@@ -120,7 +123,10 @@ public final class OpenAiCodec implements ProviderCodec {
                     || (toolCallsNode.isArray() && !toolCallsNode.isEmpty());
 
             if (hasToolCalls && toolCallsNode.isArray() && !toolCallsNode.isEmpty()) {
-                return parseToolCall(toolCallsNode.get(0));
+                // Return all tool calls so AgentLoop can execute them in parallel
+                List<ToolRequest> calls = new ArrayList<>();
+                for (JsonNode tc : toolCallsNode) calls.add(parseToolCall(tc));
+                return calls.size() == 1 ? calls.get(0) : new BatchedToolRequest(calls);
             }
 
             // ── Legacy function_call format (old OpenAI API) ──────────────────
@@ -239,7 +245,7 @@ public final class OpenAiCodec implements ProviderCodec {
 
     // ── Parsing helpers ────────────────────────────────────────────────────────
 
-    private ModelResponse parseToolCall(JsonNode toolCallNode) throws Exception {
+    private ToolRequest parseToolCall(JsonNode toolCallNode) throws Exception {
         String id   = toolCallNode.path("id").asText("call-" + System.nanoTime());
         String name = toolCallNode.path("function").path("name").asText();
         String args = normalizeArguments(toolCallNode.path("function").path("arguments"));

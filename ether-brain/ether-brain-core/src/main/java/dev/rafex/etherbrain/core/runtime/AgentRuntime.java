@@ -6,6 +6,7 @@ import dev.rafex.etherbrain.ports.runtime.AgentConfig;
 import dev.rafex.etherbrain.ports.runtime.AgentRunner;
 import dev.rafex.etherbrain.ports.runtime.CancellationToken;
 import dev.rafex.etherbrain.ports.runtime.ExecutionContext;
+import dev.rafex.etherbrain.ports.runtime.StepListener;
 import dev.rafex.etherbrain.ports.session.ConversationState;
 import dev.rafex.etherbrain.ports.session.SessionStore;
 
@@ -96,19 +97,42 @@ public final class AgentRuntime implements AgentRunner {
     /** Run without cancellation support (backward-compatible). */
     @Override
     public String run(String sessionId, String userMessage) throws Exception {
-        return run(sessionId, userMessage, null);
+        return runInternal(sessionId, userMessage, null, null);
     }
 
     /**
      * Run a single turn with optional cancellation.
      *
-     * @param sessionId        conversation session identifier
-     * @param userMessage      the user's message
+     * @param sessionId         conversation session identifier
+     * @param userMessage       the user's message
      * @param cancellationToken token that can stop the loop; {@code null} = no cancellation
      */
     @Override
     public String run(String sessionId, String userMessage,
                       CancellationToken cancellationToken) throws Exception {
+        return runInternal(sessionId, userMessage, cancellationToken, null);
+    }
+
+    /**
+     * Run with cancellation + real-time progress events via {@link StepListener}.
+     * Used by the SSE endpoint to stream per-step events to the HTTP client.
+     *
+     * @param sessionId         conversation session identifier
+     * @param userMessage       the user's message
+     * @param cancellationToken token that can stop the loop; {@code null} = no cancellation
+     * @param listener          receives step events; {@code null} = no events
+     */
+    public String run(String sessionId, String userMessage,
+                      CancellationToken cancellationToken,
+                      StepListener listener) throws Exception {
+        return runInternal(sessionId, userMessage, cancellationToken, listener);
+    }
+
+    // ── Core implementation ───────────────────────────────────────────────────
+
+    private String runInternal(String sessionId, String userMessage,
+                                CancellationToken cancellationToken,
+                                StepListener listener) throws Exception {
 
         ConversationState state = sessionStore.load(sessionId);
         state.add(new Message(Message.Role.USER, userMessage));
@@ -128,7 +152,9 @@ public final class AgentRuntime implements AgentRunner {
         // ── Loop del agente ───────────────────────────────────────────────────
         ExecutionContext ctx = new ExecutionContext(
                 sessionId, state, agentConfig, memCtx, cancellationToken);
-        String finalAnswer = agentLoop.run(ctx);
+        // Inject per-request step listener if provided (creates a lightweight copy of the loop)
+        AgentLoop loop = (listener != null) ? agentLoop.withListener(listener) : agentLoop;
+        String finalAnswer = loop.run(ctx);
 
         sessionStore.save(sessionId, state);
 

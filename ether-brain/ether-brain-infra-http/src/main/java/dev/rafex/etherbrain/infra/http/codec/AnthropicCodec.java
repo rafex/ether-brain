@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import dev.rafex.etherbrain.infra.http.HttpModelConfig;
 import dev.rafex.etherbrain.infra.http.ProviderCodec;
+import dev.rafex.etherbrain.ports.model.BatchedToolRequest;
 import dev.rafex.etherbrain.ports.model.FinalAnswer;
 import dev.rafex.etherbrain.ports.model.Message;
 import dev.rafex.etherbrain.ports.model.ModelRequest;
@@ -14,6 +15,8 @@ import dev.rafex.etherbrain.ports.model.ToolDescriptor;
 import dev.rafex.etherbrain.ports.model.ToolRequest;
 import java.net.http.HttpRequest;
 import java.net.http.HttpRequest.BodyPublishers;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Codec for the Anthropic Messages API (Claude models).
@@ -95,18 +98,24 @@ public final class AnthropicCodec implements ProviderCodec {
             String stopReason = root.path("stop_reason").asText();
             JsonNode contentBlocks = root.path("content");
 
-            // ── Tool call ─────────────────────────────────────────────────────
+            // ── Tool call(s) ──────────────────────────────────────────────────
+            // Claude can return multiple tool_use blocks in one turn.
+            // Return all of them so AgentLoop can execute them in parallel.
             if ("tool_use".equals(stopReason)) {
+                List<ToolRequest> calls = new ArrayList<>();
                 for (JsonNode block : contentBlocks) {
                     if ("tool_use".equals(block.path("type").asText())) {
                         String id    = block.path("id").asText();
                         String name  = block.path("name").asText();
                         String input = mapper.writeValueAsString(block.path("input"));
-                        return new ToolRequest(id, name, input);
+                        calls.add(new ToolRequest(id, name, input));
                     }
                 }
-                throw new RuntimeException(
-                        "stop_reason=tool_use but no tool_use block found. Body: " + responseBody);
+                if (calls.isEmpty()) {
+                    throw new RuntimeException(
+                            "stop_reason=tool_use but no tool_use block found. Body: " + responseBody);
+                }
+                return calls.size() == 1 ? calls.get(0) : new BatchedToolRequest(calls);
             }
 
             // ── Final answer — collect all text blocks ────────────────────────

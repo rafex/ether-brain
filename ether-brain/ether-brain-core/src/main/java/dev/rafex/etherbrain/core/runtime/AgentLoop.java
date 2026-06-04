@@ -2,6 +2,7 @@ package dev.rafex.etherbrain.core.runtime;
 
 import dev.rafex.etherbrain.common.AgentException;
 import dev.rafex.etherbrain.core.prompt.PromptBuilder;
+import dev.rafex.etherbrain.ports.model.BatchedToolRequest;
 import dev.rafex.etherbrain.ports.model.FinalAnswer;
 import dev.rafex.etherbrain.ports.model.Message;
 import dev.rafex.etherbrain.ports.model.ModelClient;
@@ -11,13 +12,16 @@ import dev.rafex.etherbrain.ports.model.ToolRequest;
 import dev.rafex.etherbrain.ports.policy.PolicyEngine;
 import dev.rafex.etherbrain.ports.policy.RetryPolicy;
 import dev.rafex.etherbrain.ports.runtime.ExecutionContext;
+import dev.rafex.etherbrain.ports.runtime.StepListener;
 import dev.rafex.etherbrain.ports.tools.ToolCall;
 import dev.rafex.etherbrain.ports.tools.ToolExecutor;
 import dev.rafex.etherbrain.ports.tools.ToolRegistry;
 import dev.rafex.etherbrain.ports.tools.ToolResult;
 import dev.rafex.ether.logging.core.logger.EtherLog;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Callable;
@@ -52,9 +56,10 @@ public final class AgentLoop {
     private final ToolExecutor  toolExecutor;
     private final PromptBuilder promptBuilder;
     private final PolicyEngine  policyEngine;
-    private final RetryPolicy   retryPolicy;   // null = no retry
+    private final RetryPolicy   retryPolicy;    // null = no retry
+    private final StepListener  stepListener;   // null = no progress events
 
-    /** Constructor without retry policy (backward-compatible). */
+    /** Backward-compatible — no retry, no step listener. */
     public AgentLoop(
             ModelClient modelClient,
             ToolRegistry toolRegistry,
@@ -62,10 +67,10 @@ public final class AgentLoop {
             PromptBuilder promptBuilder,
             PolicyEngine policyEngine
     ) {
-        this(modelClient, toolRegistry, toolExecutor, promptBuilder, policyEngine, null);
+        this(modelClient, toolRegistry, toolExecutor, promptBuilder, policyEngine, null, null);
     }
 
-    /** Constructor with optional retry policy. */
+    /** With retry, no step listener. */
     public AgentLoop(
             ModelClient modelClient,
             ToolRegistry toolRegistry,
@@ -74,12 +79,36 @@ public final class AgentLoop {
             PolicyEngine policyEngine,
             RetryPolicy retryPolicy
     ) {
+        this(modelClient, toolRegistry, toolExecutor, promptBuilder, policyEngine, retryPolicy, null);
+    }
+
+    /** Full constructor — retry + step listener. */
+    public AgentLoop(
+            ModelClient modelClient,
+            ToolRegistry toolRegistry,
+            ToolExecutor toolExecutor,
+            PromptBuilder promptBuilder,
+            PolicyEngine policyEngine,
+            RetryPolicy retryPolicy,
+            StepListener stepListener
+    ) {
         this.modelClient   = modelClient;
         this.toolRegistry  = toolRegistry;
         this.toolExecutor  = toolExecutor;
         this.promptBuilder = promptBuilder;
         this.policyEngine  = policyEngine;
         this.retryPolicy   = retryPolicy;
+        this.stepListener  = stepListener;
+    }
+
+    /**
+     * Returns a copy of this loop with the given {@link StepListener} attached.
+     * Allows the HTTP transport to inject an SSE listener per-request without
+     * rebuilding the entire loop.
+     */
+    public AgentLoop withListener(StepListener listener) {
+        return new AgentLoop(modelClient, toolRegistry, toolExecutor,
+                promptBuilder, policyEngine, retryPolicy, listener);
     }
 
     public String run(ExecutionContext context) throws Exception {
@@ -98,6 +127,7 @@ public final class AgentLoop {
             }
 
             policyEngine.checkBeforeStep(context, step);
+            emit(() -> stepListener.onStepStart(currentStep));
 
             EtherLog.info(AgentLoop.class,
                     "Step {} - building model request for session {}",
@@ -114,10 +144,11 @@ public final class AgentLoop {
                 context.conversationState().add(
                         new Message(Message.Role.ASSISTANT, finalAnswer.content()));
                 policyEngine.checkAfterStep(context, step);
+                emit(() -> stepListener.onFinalAnswer(finalAnswer.content()));
                 return finalAnswer.content();
             }
 
-            // ── Tool call ─────────────────────────────────────────────────────
+            // ── Single tool call ──────────────────────────────────────────────
             if (response instanceof ToolRequest toolRequest) {
                 String callId = toolRequest.toolCallId() != null
                         ? toolRequest.toolCallId()
@@ -127,6 +158,9 @@ public final class AgentLoop {
                         "Step {} - executing tool {} for session {}",
                         currentStep, toolRequest.toolName(), context.sessionId());
 
+                emit(() -> stepListener.onToolCall(currentStep,
+                        toolRequest.toolName(), toolRequest.arguments()));
+
                 context.conversationState().add(new Message(
                         Message.Role.ASSISTANT,
                         toolRequest.toolName() + "|" + toolRequest.arguments(),
@@ -134,8 +168,18 @@ public final class AgentLoop {
 
                 ToolResult result = executeWithRetry(toolRequest, callId, context, retryCount);
 
+                emit(() -> stepListener.onToolResult(currentStep,
+                        toolRequest.toolName(), result.success(), result.content()));
+
                 context.conversationState().add(
                         new Message(Message.Role.TOOL, result.content(), callId));
+                policyEngine.checkAfterStep(context, step);
+                continue;
+            }
+
+            // ── Batched tool calls (parallel execution) ───────────────────────
+            if (response instanceof BatchedToolRequest batch) {
+                executeBatchedTools(batch, context, retryCount, currentStep);
                 policyEngine.checkAfterStep(context, step);
                 continue;
             }
@@ -144,7 +188,67 @@ public final class AgentLoop {
                     "Unsupported model response type: " + response.getClass().getName());
         }
 
+        emit(() -> stepListener.onError("Max steps exceeded without final answer"));
         throw new AgentException("Max steps exceeded without final answer");
+    }
+
+    // ── Batched (parallel) tool execution ────────────────────────────────────
+
+    /**
+     * Executes all tool calls in the batch concurrently using virtual threads.
+     *
+     * <p>Protocol:
+     * <ol>
+     *   <li>Record all ASSISTANT tool-call messages first (in order) so the
+     *       conversation history is well-formed for OpenAI/Anthropic.</li>
+     *   <li>Launch all tool executions in parallel via virtual threads.</li>
+     *   <li>Collect results in the original order and add TOOL messages.</li>
+     * </ol>
+     */
+    private void executeBatchedTools(BatchedToolRequest batch, ExecutionContext context,
+                                     Map<String, Integer> retryCount,
+                                     int currentStep) throws Exception {
+        EtherLog.info(AgentLoop.class,
+                "Step {} - executing {} tool calls in parallel for session {}",
+                currentStep, batch.size(), context.sessionId());
+
+        // Step 1: assign call IDs and record ASSISTANT messages (ordered, sequential)
+        List<String> callIds = new ArrayList<>(batch.size());
+        for (ToolRequest tr : batch.calls()) {
+            String callId = tr.toolCallId() != null ? tr.toolCallId() : UUID.randomUUID().toString();
+            callIds.add(callId);
+            context.conversationState().add(new Message(
+                    Message.Role.ASSISTANT,
+                    tr.toolName() + "|" + tr.arguments(),
+                    callId));
+        }
+
+        // Step 2: execute all tool calls in parallel
+        var executor = Executors.newVirtualThreadPerTaskExecutor();
+        List<Future<ToolResult>> futures = new ArrayList<>(batch.size());
+        for (int i = 0; i < batch.calls().size(); i++) {
+            final ToolRequest tr    = batch.calls().get(i);
+            final String      callId = callIds.get(i);
+            futures.add(executor.submit(() -> executeWithRetry(tr, callId, context, retryCount)));
+        }
+        executor.shutdown();
+
+        // Step 3: collect results in order and record TOOL messages
+        Duration toolTimeout = context.agentConfig().modelTimeout(); // reuse model timeout
+        for (int i = 0; i < futures.size(); i++) {
+            ToolResult result;
+            try {
+                result = futures.get(i).get(toolTimeout.toMillis(), TimeUnit.MILLISECONDS);
+            } catch (TimeoutException e) {
+                result = new ToolResult(batch.calls().get(i).toolName(), false,
+                        "Error: tool timed out after " + toolTimeout.toSeconds() + "s");
+            } catch (ExecutionException e) {
+                String msg = e.getCause() != null ? e.getCause().getMessage() : e.getMessage();
+                result = new ToolResult(batch.calls().get(i).toolName(), false, "Error: " + msg);
+            }
+            context.conversationState().add(
+                    new Message(Message.Role.TOOL, result.content(), callIds.get(i)));
+        }
     }
 
     // ── Retry-aware tool execution ────────────────────────────────────────────
@@ -195,6 +299,21 @@ public final class AgentLoop {
 
                 return new ToolResult(toolName, false, "Error: " + errorMsg);
             }
+        }
+    }
+
+    // ── StepListener helper ───────────────────────────────────────────────────
+
+    /**
+     * Safely invokes a listener callback, swallowing any exception so that a
+     * broken listener never aborts an agent run.
+     */
+    private void emit(Runnable callback) {
+        if (stepListener == null) return;
+        try {
+            callback.run();
+        } catch (Exception e) {
+            EtherLog.warn(AgentLoop.class, "StepListener threw (ignored): {}", e.getMessage());
         }
     }
 
