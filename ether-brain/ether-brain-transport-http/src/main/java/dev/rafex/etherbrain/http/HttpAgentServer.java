@@ -2,14 +2,19 @@ package dev.rafex.etherbrain.http;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import dev.rafex.ether.logging.core.logger.EtherLog;
 import dev.rafex.etherbrain.bootstrap.ApplicationBootstrap;
 import dev.rafex.etherbrain.core.runtime.AgentRuntime;
+import dev.rafex.etherbrain.ports.observability.MetricsCollector;
 import dev.rafex.etherbrain.ports.runtime.CancellationToken;
 import dev.rafex.etherbrain.ports.runtime.StepListener;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -64,9 +69,10 @@ public final class HttpAgentServer {
     private static final Pattern CANCEL_PATH   = Pattern.compile("^/sessions/([^/]+)/cancel$");
     private static final Pattern EVENTS_PATH   = Pattern.compile("^/events$");
 
-    private final AgentRuntime runtime;
-    private final int port;
-    private final int threads;
+    private final AgentRuntime     runtime;
+    private final int              port;
+    private final int              threads;
+    private final MetricsCollector metrics;
 
     /** Active cancellation tokens, keyed by sessionId. */
     private final ConcurrentHashMap<String, CancellationToken.Mutable> activeLoops =
@@ -75,12 +81,24 @@ public final class HttpAgentServer {
     /** Async event queue for reactive processing. */
     private final BlockingQueue<AgentEvent> eventQueue;
 
+    /** Shared HTTP client for outbound callbacks — one instance, shared connection pool. */
+    private final java.net.http.HttpClient callbackClient =
+            java.net.http.HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(5))
+                    .build();
+
     private HttpServer server;
 
     public HttpAgentServer(AgentRuntime runtime, int port, int threads, int eventQueueCapacity) {
+        this(runtime, port, threads, eventQueueCapacity, MetricsCollector.noop());
+    }
+
+    public HttpAgentServer(AgentRuntime runtime, int port, int threads,
+                           int eventQueueCapacity, MetricsCollector metrics) {
         this.runtime    = runtime;
         this.port       = port;
         this.threads    = threads;
+        this.metrics    = metrics != null ? metrics : MetricsCollector.noop();
         this.eventQueue = new ArrayBlockingQueue<>(eventQueueCapacity);
     }
 
@@ -96,12 +114,12 @@ public final class HttpAgentServer {
         // Start async event processor
         startEventProcessor();
 
-        System.out.printf("[EtherBrain HTTP] Escuchando en :%d%n", port);
-        System.out.println("[EtherBrain HTTP] POST   /sessions/{id}/run");
-        System.out.println("[EtherBrain HTTP] POST   /sessions/{id}/run/stream  (SSE)");
-        System.out.println("[EtherBrain HTTP] DELETE /sessions/{id}/cancel");
-        System.out.println("[EtherBrain HTTP] POST   /events                    (async)");
-        System.out.println("[EtherBrain HTTP] GET    /health");
+        EtherLog.info(HttpAgentServer.class, "Servidor HTTP iniciado en :{}", port);
+        EtherLog.info(HttpAgentServer.class, "POST   /sessions/{{id}}/run");
+        EtherLog.info(HttpAgentServer.class, "POST   /sessions/{{id}}/run/stream  (SSE)");
+        EtherLog.info(HttpAgentServer.class, "DELETE /sessions/{{id}}/cancel");
+        EtherLog.info(HttpAgentServer.class, "POST   /events                    (async)");
+        EtherLog.info(HttpAgentServer.class, "GET    /health");
     }
 
     public void stop() {
@@ -172,10 +190,15 @@ public final class HttpAgentServer {
         AgentEvent event = new AgentEvent(sessionId, message, callback);
         boolean queued = eventQueue.offer(event);
         if (!queued) {
+            metrics.increment("event.queue.rejected", "sessionId=" + sessionId);
+            EtherLog.warn(HttpAgentServer.class,
+                    "Event queue full — rejected sessionId={}", sessionId);
             respond(ex, 503, json("error", "Event queue full — try again later"));
             return;
         }
 
+        metrics.increment("event.queued", "sessionId=" + sessionId);
+        metrics.gauge("event.queue.size", eventQueue.size());
         respond(ex, 202,
                 "{\"queued\":true,\"position\":" + eventQueue.size() + "}");
     }
@@ -183,19 +206,34 @@ public final class HttpAgentServer {
     // ── Sync run ──────────────────────────────────────────────────────────────
 
     private void handleRun(HttpExchange ex, String sessionId) throws IOException {
-        String message = readMessage(ex);
+        String requestId = resolveRequestId(ex);
+        String message   = readMessage(ex);
         if (message == null) return;
 
         CancellationToken.Mutable token = CancellationToken.create();
         activeLoops.put(sessionId, token);
 
+        Instant start = Instant.now();
         try {
-            String answer = runtime.run(sessionId, message, token);
-            respond(ex, 200,
+            String answer = runtime.run(sessionId, message, token, null, requestId);
+            Duration latency = Duration.between(start, Instant.now());
+            metrics.record("http.request.duration", latency,
+                    "endpoint=run", "status=200", "requestId=" + requestId);
+            metrics.increment("http.requests.total",
+                    "endpoint=run", "status=200", "requestId=" + requestId);
+            respondWithRequestId(ex, requestId, 200,
                     "{\"sessionId\":" + jsonString(sessionId) +
-                    ",\"answer\":"    + jsonString(answer) + "}");
+                    ",\"answer\":"    + jsonString(answer)    +
+                    ",\"requestId\":" + jsonString(requestId) + "}");
         } catch (Exception e) {
-            respond(ex, 500, json("error", e.getMessage()));
+            Duration latency = Duration.between(start, Instant.now());
+            metrics.record("http.request.duration", latency,
+                    "endpoint=run", "status=500", "requestId=" + requestId);
+            metrics.increment("http.requests.total",
+                    "endpoint=run", "status=500", "requestId=" + requestId);
+            EtherLog.error(HttpAgentServer.class,
+                    "Run failed — sessionId={} requestId={}: {}", sessionId, requestId, e.getMessage());
+            respondWithRequestId(ex, requestId, 500, json("error", e.getMessage()));
         } finally {
             activeLoops.remove(sessionId);
         }
@@ -204,30 +242,33 @@ public final class HttpAgentServer {
     // ── SSE streaming run ─────────────────────────────────────────────────────
 
     private void handleStream(HttpExchange ex, String sessionId) throws IOException {
-        String message = readMessage(ex);
+        String requestId = resolveRequestId(ex);
+        String message   = readMessage(ex);
         if (message == null) return;
 
         ex.getResponseHeaders().set("Content-Type",  "text/event-stream; charset=utf-8");
         ex.getResponseHeaders().set("Cache-Control", "no-cache");
         ex.getResponseHeaders().set("Connection",    "keep-alive");
+        ex.getResponseHeaders().set("X-Request-ID",  requestId);
         ex.sendResponseHeaders(200, 0);
 
         CancellationToken.Mutable token = CancellationToken.create();
         activeLoops.put(sessionId, token);
 
+        Instant start = Instant.now();
         try (OutputStream out = ex.getResponseBody()) {
-            // Start event
-            writeEvent(out, "{\"type\":\"start\",\"sessionId\":" + jsonString(sessionId) + "}");
+            // Start event — include requestId so client can correlate
+            writeEvent(out, "{\"type\":\"start\",\"sessionId\":" + jsonString(sessionId)
+                    + ",\"requestId\":" + jsonString(requestId) + "}");
 
             // Step listener: emits SSE events for each loop step
             StepListener listener = new StepListener() {
                 @Override public void onStepStart(int step) {
                     trySse(out, "{\"type\":\"thinking\",\"step\":" + step + "}");
                 }
-                @Override public void onToken(int step, String token) {
-                    // Real-time token streaming — emitted for each text chunk from the LLM
+                @Override public void onToken(int step, String tok) {
                     trySse(out, "{\"type\":\"token\",\"step\":" + step
-                            + ",\"text\":" + jsonString(token) + "}");
+                            + ",\"text\":" + jsonString(tok) + "}");
                 }
                 @Override public void onToolCall(int step, String tool, String args) {
                     trySse(out, "{\"type\":\"tool_call\",\"step\":" + step
@@ -252,12 +293,25 @@ public final class HttpAgentServer {
             final String msg = message;
             Thread.ofVirtual().start(() -> {
                 try {
-                    String answer = runtime.run(sessionId, msg, token, listener);
+                    String answer = runtime.run(sessionId, msg, token, listener, requestId);
+                    Duration latency = Duration.between(start, Instant.now());
+                    metrics.record("http.request.duration", latency,
+                            "endpoint=stream", "status=200", "requestId=" + requestId);
+                    metrics.increment("http.requests.total",
+                            "endpoint=stream", "status=200", "requestId=" + requestId);
                     try {
                         writeEvent(out, "{\"type\":\"answer\",\"content\":" + jsonString(answer) + "}");
                         writeEvent(out, "{\"type\":\"done\"}");
                     } catch (IOException ignored) {}
                 } catch (Exception e) {
+                    Duration latency = Duration.between(start, Instant.now());
+                    metrics.record("http.request.duration", latency,
+                            "endpoint=stream", "status=500", "requestId=" + requestId);
+                    metrics.increment("http.requests.total",
+                            "endpoint=stream", "status=500", "requestId=" + requestId);
+                    EtherLog.error(HttpAgentServer.class,
+                            "Stream failed — sessionId={} requestId={}: {}",
+                            sessionId, requestId, e.getMessage());
                     try {
                         writeEvent(out, "{\"type\":\"error\",\"content\":" +
                                 jsonString(e.getMessage()) + "}");
@@ -321,17 +375,27 @@ public final class HttpAgentServer {
     }
 
     private void processEvent(AgentEvent event) {
+        Instant start = Instant.now();
         try {
             String answer = runtime.run(event.sessionId(), event.message());
+            metrics.record("event.processing.duration", Duration.between(start, Instant.now()),
+                    "sessionId=" + event.sessionId(), "status=ok");
+            metrics.increment("event.processed.total",
+                    "sessionId=" + event.sessionId(), "status=ok");
             if (event.callbackUrl() != null && !event.callbackUrl().isBlank()) {
                 sendCallback(event.callbackUrl(), event.sessionId(), answer, null);
             }
         } catch (Exception e) {
+            metrics.record("event.processing.duration", Duration.between(start, Instant.now()),
+                    "sessionId=" + event.sessionId(), "status=error");
+            metrics.increment("event.processed.total",
+                    "sessionId=" + event.sessionId(), "status=error");
+            EtherLog.error(HttpAgentServer.class,
+                    "Event processing failed — sessionId={}: {}",
+                    event.sessionId(), e.getMessage());
             if (event.callbackUrl() != null && !event.callbackUrl().isBlank()) {
                 sendCallback(event.callbackUrl(), event.sessionId(), null, e.getMessage());
             }
-            System.err.println("[EtherBrain HTTP] Event processing failed for session "
-                    + event.sessionId() + ": " + e.getMessage());
         }
     }
 
@@ -341,18 +405,21 @@ public final class HttpAgentServer {
                     ? "{\"sessionId\":" + jsonString(sessionId) + ",\"answer\":" + jsonString(answer) + "}"
                     : "{\"sessionId\":" + jsonString(sessionId) + ",\"error\":" + jsonString(error) + "}";
 
-            java.net.http.HttpClient client = java.net.http.HttpClient.newHttpClient();
-            client.send(
+            // Uses the shared HttpClient (one connection pool for the server lifetime)
+            callbackClient.send(
                     java.net.http.HttpRequest.newBuilder()
                             .uri(java.net.URI.create(callbackUrl))
                             .header("Content-Type", "application/json")
+                            .timeout(Duration.ofSeconds(10))
                             .POST(java.net.http.HttpRequest.BodyPublishers.ofString(body))
                             .build(),
                     java.net.http.HttpResponse.BodyHandlers.discarding());
 
+            metrics.increment("callback.sent.total", "status=ok");
         } catch (Exception e) {
-            System.err.println("[EtherBrain HTTP] Callback failed to " + callbackUrl
-                    + ": " + e.getMessage());
+            metrics.increment("callback.sent.total", "status=error");
+            EtherLog.warn(HttpAgentServer.class,
+                    "Callback failed — url={}: {}", callbackUrl, e.getMessage());
         }
     }
 
@@ -376,7 +443,35 @@ public final class HttpAgentServer {
         return message;
     }
 
+    // ── Request ID helpers ────────────────────────────────────────────────────
+
+    /**
+     * Returns the value of the incoming {@code X-Request-ID} header if present,
+     * otherwise generates a new 8-character correlation ID.
+     *
+     * <p>By accepting a client-supplied ID, distributed systems can propagate
+     * correlation identifiers end-to-end (e.g. an API gateway sets the header
+     * and the agent's logs carry the same ID).
+     */
+    private static String resolveRequestId(HttpExchange ex) {
+        String incoming = ex.getRequestHeaders().getFirst("X-Request-ID");
+        if (incoming != null && !incoming.isBlank()) {
+            // Sanitize — keep only alphanumeric and hyphens, max 64 chars
+            String safe = incoming.replaceAll("[^a-zA-Z0-9\\-]", "");
+            if (!safe.isBlank()) return safe.substring(0, Math.min(safe.length(), 64));
+        }
+        // Generate a short ID: first 8 chars of a UUID (collision-safe for logging)
+        return UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+    }
+
     // ── Response helpers ──────────────────────────────────────────────────────
+
+    /** Respond with JSON body and set {@code X-Request-ID} header. */
+    private static void respondWithRequestId(HttpExchange ex, String requestId,
+                                             int status, String body) throws IOException {
+        ex.getResponseHeaders().set("X-Request-ID", requestId);
+        respond(ex, status, body);
+    }
 
     private static void respond(HttpExchange ex, int status, String body) throws IOException {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
@@ -422,11 +517,13 @@ public final class HttpAgentServer {
 
     /** Construye el servidor desde variables de entorno estándar. */
     public static HttpAgentServer fromEnv() {
-        AgentRuntime runtime = new ApplicationBootstrap().bootstrap();
+        ApplicationBootstrap bootstrap = new ApplicationBootstrap();
+        AgentRuntime runtime   = bootstrap.bootstrap();
+        MetricsCollector metrics = ApplicationBootstrap.buildMetricsCollector();
         int port       = Integer.parseInt(envOrProp("HTTP_PORT",       "8080"));
         int threads    = Integer.parseInt(envOrProp("HTTP_THREADS",    "4"));
         int eventQueue = Integer.parseInt(envOrProp("HTTP_EVENT_QUEUE","100"));
-        return new HttpAgentServer(runtime, port, threads, eventQueue);
+        return new HttpAgentServer(runtime, port, threads, eventQueue, metrics);
     }
 
     private static String envOrProp(String name, String def) {

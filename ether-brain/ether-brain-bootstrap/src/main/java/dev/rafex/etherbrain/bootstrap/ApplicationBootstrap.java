@@ -1,5 +1,7 @@
 package dev.rafex.etherbrain.bootstrap;
 
+import dev.rafex.ether.logging.core.logger.EtherLog;
+import dev.rafex.etherbrain.core.observability.LoggingMetricsCollector;
 import dev.rafex.etherbrain.core.policy.DefaultPolicyEngine;
 import dev.rafex.etherbrain.core.policy.DefaultRetryPolicy;
 import dev.rafex.etherbrain.core.prompt.PromptBuilder;
@@ -8,6 +10,7 @@ import dev.rafex.etherbrain.core.runtime.AgentRuntime;
 import dev.rafex.etherbrain.core.runtime.AgentTool;
 import dev.rafex.etherbrain.core.runtime.LocalAgentRegistry;
 import dev.rafex.etherbrain.core.tools.DefaultToolExecutor;
+import dev.rafex.etherbrain.ports.observability.MetricsCollector;
 import dev.rafex.etherbrain.ports.policy.RetryPolicy;
 import dev.rafex.etherbrain.ports.runtime.AgentRegistry;
 import dev.rafex.ether.logging.core.config.LoggingConfigurator;
@@ -160,7 +163,8 @@ public final class ApplicationBootstrap {
         if (faissUrl != null && !faissUrl.isBlank()) {
             TokenProvider faissToken = buildFaissTokenProvider(faissUrl, skipTls);
             if (faissToken == null) {
-                System.err.println("[EtherBrain] FAISS_BASE_URL definido pero sin credenciales. " +
+                EtherLog.warn(ApplicationBootstrap.class,
+                        "FAISS_BASE_URL definido pero sin credenciales. " +
                         "Configura FAISS_EMAIL+FAISS_PASSWORD, FAISS_AUTH_TOKEN o FAISS_API_KEY.");
             } else {
                 // RAG — búsqueda en documentos permanentes (v1)
@@ -169,7 +173,8 @@ public final class ApplicationBootstrap {
                 enabledTools.add("knowledge_search");
                 remoteServices.put(KnowledgeSearchTool.SERVICE_NAME,
                         RemoteServiceConfig.of(KnowledgeSearchTool.SERVICE_NAME, faissUrl, ""));
-                System.out.println("[EtherBrain] knowledge_search (RAG v1) → " + faissUrl);
+                EtherLog.info(ApplicationBootstrap.class,
+                        "knowledge_search (RAG v1) → {}", faissUrl);
 
                 // Memoria de agente (v2) — scratchpad + commit a largo plazo
                 String memoryNs = env("FAISS_MEMORY_NAMESPACE",
@@ -184,11 +189,11 @@ public final class ApplicationBootstrap {
                     toolRegistry.register(
                             new MemoryCommitTool(faissUrl, memoryNs, faissToken, fmp, skipTls));
                     enabledTools.add("memory_commit");
-                    System.out.println("[EtherBrain] memoria (v2) → namespace=" + memoryNs +
-                            " ttl=" + sessionTtl + "m");
+                    EtherLog.info(ApplicationBootstrap.class,
+                            "memoria (v2) → namespace={} ttl={}m", memoryNs, sessionTtl);
                 } else {
-                    System.out.println("[EtherBrain] memoria v2 desactivada — " +
-                            "define FAISS_MEMORY_NAMESPACE para activarla");
+                    EtherLog.info(ApplicationBootstrap.class,
+                            "memoria v2 desactivada — define FAISS_MEMORY_NAMESPACE para activarla");
                 }
             }
         }
@@ -206,8 +211,9 @@ public final class ApplicationBootstrap {
                 Map.copyOf(remoteServices),
                 systemPrompt);
 
-        // ── Retry policy ──────────────────────────────────────────────────────
-        RetryPolicy retryPolicy = buildRetryPolicy();
+        // ── Retry policy + metrics ────────────────────────────────────────────
+        RetryPolicy      retryPolicy = buildRetryPolicy();
+        MetricsCollector metrics     = buildMetricsCollector();
 
         AgentLoop agentLoop = new AgentLoop(
                 modelClient,
@@ -215,7 +221,9 @@ public final class ApplicationBootstrap {
                 new DefaultToolExecutor(toolRegistry),
                 new PromptBuilder(),
                 new DefaultPolicyEngine(),
-                retryPolicy
+                retryPolicy,
+                null,      // stepListener — injected per-request by HTTP transport
+                metrics
         );
 
         // ── Agent name and description ────────────────────────────────────────
@@ -224,7 +232,8 @@ public final class ApplicationBootstrap {
                 "AI agent powered by EtherBrain. Delegates complex sub-tasks when needed.");
 
         AgentRuntime runtime = new AgentRuntime(
-                sessionStore, agentLoop, agentConfig, memoryProvider, agentName, agentDesc);
+                sessionStore, agentLoop, agentConfig, memoryProvider,
+                agentName, agentDesc, metrics);
 
         // ── Register this agent in the global registry ────────────────────────
         AGENT_REGISTRY.register(runtime);
@@ -241,8 +250,14 @@ public final class ApplicationBootstrap {
                 .forEach(subAgent -> {
                     toolRegistry.register(new AgentTool(subAgent));
                     enabledTools.add(subAgent.agentName());
-                    System.out.println("[EtherBrain] sub-agent tool: " + subAgent.agentName());
+                    EtherLog.info(ApplicationBootstrap.class,
+                            "sub-agent tool registrado: {}", subAgent.agentName());
                 });
+
+        EtherLog.info(ApplicationBootstrap.class,
+                "Bootstrap completo — agente='{}' tools={} maxSteps={} timeout={}s",
+                agentName, enabledTools.size(), maxSteps,
+                timeout.toSeconds());
 
         return runtime;
     }
@@ -275,7 +290,8 @@ public final class ApplicationBootstrap {
         String llmModel = env("LLM_MODEL", "");
 
         if (llmUrl == null || llmUrl.isBlank()) {
-            System.err.println("[EtherBrain] LLM_URL no definida — modo demo (sin LLM real).");
+            EtherLog.warn(ApplicationBootstrap.class,
+                    "LLM_URL no definida — modo demo (sin LLM real).");
             return new DemoModelClient();
         }
         if (llmModel.isBlank()) {
@@ -283,14 +299,17 @@ public final class ApplicationBootstrap {
                     "LLM_URL está definida pero falta LLM_MODEL.");
         }
 
+        int maxTokens = (int) parseLong(env("LLM_MAX_TOKENS", "4096"), 4096);
+
         // timeout unificado: mismo valor para HTTP y para el Future del loop
         HttpModelConfig config = new HttpModelConfig(
-                URI.create(llmUrl), llmToken, llmModel, 4096, timeout);
+                URI.create(llmUrl), llmToken, llmModel, maxTokens, timeout);
 
         ProviderCodec codec = resolveCodec(llmUrl);
         String llmType = env("LLM_TYPE", "openai");
-        System.out.println("[EtherBrain] LLM → " + llmUrl +
-                " | tipo: " + llmType + " | modelo: " + llmModel);
+        EtherLog.info(ApplicationBootstrap.class,
+                "LLM → {} | tipo={} | modelo={} | maxTokens={} | timeout={}s",
+                llmUrl, llmType, llmModel, maxTokens, timeout.toSeconds());
         return new HttpModelClient(config, codec);
     }
 
@@ -324,16 +343,19 @@ public final class ApplicationBootstrap {
         // 2 — inferencia por hostname (LLM_URL es URL base, no tiene path)
         String host = llmUrl.toLowerCase();
         if (host.contains("anthropic.com")) {
-            warn("LLM_TYPE no definido — inferido 'anthropic' del hostname. Añade LLM_TYPE=anthropic.");
+            EtherLog.warn(ApplicationBootstrap.class,
+                    "LLM_TYPE no definido — inferido 'anthropic' del hostname. Añade LLM_TYPE=anthropic.");
             return new AnthropicCodec();
         }
         if (host.contains("generativelanguage.googleapis.com") ||
             host.contains("aiplatform.googleapis.com")) {
-            warn("LLM_TYPE no definido — inferido 'gemini' del hostname. Añade LLM_TYPE=gemini.");
+            EtherLog.warn(ApplicationBootstrap.class,
+                    "LLM_TYPE no definido — inferido 'gemini' del hostname. Añade LLM_TYPE=gemini.");
             return new GeminiCodec();
         }
         if (host.contains("amazonaws.com")) {
-            warn("LLM_TYPE no definido — inferido 'bedrock' del hostname. Añade LLM_TYPE=bedrock.");
+            EtherLog.warn(ApplicationBootstrap.class,
+                    "LLM_TYPE no definido — inferido 'bedrock' del hostname. Añade LLM_TYPE=bedrock.");
             return new BedrockCodec();
         }
 
@@ -341,15 +363,17 @@ public final class ApplicationBootstrap {
         return new OpenAiCodec();
     }
 
-    private static void warn(String msg) {
-        System.err.println("[EtherBrain] AVISO: " + msg);
-    }
+    // warn() removed — callers now use EtherLog.warn() directly.
 
     // ── Session store ─────────────────────────────────────────────────────────
 
     private static SessionStore buildSessionStore() {
         String dir = System.getenv("SESSION_DIR");
-        if (dir == null || dir.isBlank()) return new InMemorySessionStore();
+        if (dir == null || dir.isBlank()) {
+            EtherLog.info(ApplicationBootstrap.class,
+                    "SESSION_DIR no definido — sesiones en memoria (no persistentes).");
+            return new InMemorySessionStore();
+        }
 
         // SESSION_TTL_HOURS — horas de vida de una sesión (0 = sin límite)
         long ttlHours = parseLong(env("SESSION_TTL_HOURS", "0"), 0);
@@ -365,12 +389,13 @@ public final class ApplicationBootstrap {
         String email    = System.getenv("FAISS_EMAIL");
         String password = System.getenv("FAISS_PASSWORD");
         if (email != null && !email.isBlank() && password != null && !password.isBlank()) {
-            System.out.println("[EtherBrain] faiss-poc auth: login automático (" + email + ")");
+            EtherLog.info(ApplicationBootstrap.class,
+                    "faiss-poc auth: login automático ({})", email);
             return new FaissTokenManager(URI.create(baseUrl), email, password, skipTls);
         }
         String staticToken = env("FAISS_AUTH_TOKEN", System.getenv("FAISS_API_KEY"));
         if (staticToken != null && !staticToken.isBlank()) {
-            System.out.println("[EtherBrain] faiss-poc auth: token estático");
+            EtherLog.info(ApplicationBootstrap.class, "faiss-poc auth: token estático");
             return () -> staticToken;
         }
         return null;
@@ -441,11 +466,12 @@ public final class ApplicationBootstrap {
                 }
             }
             if (loaded > 0) {
-                System.out.println("[EtherBrain] .env cargado: " + envFile +
-                        " (" + loaded + " variables)");
+                EtherLog.info(ApplicationBootstrap.class,
+                        ".env cargado: {} ({} variables)", envFile, loaded);
             }
         } catch (IOException e) {
-            System.err.println("[EtherBrain] No se pudo leer .env: " + envFile + " — " + e.getMessage());
+            EtherLog.warn(ApplicationBootstrap.class,
+                    "No se pudo leer .env: {} — {}", envFile, e.getMessage());
         }
     }
 
@@ -455,7 +481,8 @@ public final class ApplicationBootstrap {
         if (explicit != null && !explicit.isBlank()) {
             Path p = Path.of(explicit);
             if (Files.exists(p)) return p;
-            System.err.println("[EtherBrain] ENV_FILE definido pero no existe: " + p);
+            EtherLog.warn(ApplicationBootstrap.class,
+                    "ENV_FILE definido pero no existe: {}", p);
             return null;
         }
         // 2. .env en el directorio actual
@@ -480,10 +507,35 @@ public final class ApplicationBootstrap {
         int  maxRetries = (int) parseLong(env("AGENT_RETRY_MAX",      "0"),   0);
         long delayMs    =       parseLong(env("AGENT_RETRY_DELAY_MS", "500"), 500);
         if (maxRetries > 0) {
-            System.out.println("[EtherBrain] retry policy: max=" + maxRetries
-                    + " delay=" + delayMs + "ms");
+            EtherLog.info(ApplicationBootstrap.class,
+                    "retry policy: max={} delay={}ms", maxRetries, delayMs);
         }
         return new DefaultRetryPolicy(maxRetries, delayMs);
+    }
+
+    // ── Metrics ───────────────────────────────────────────────────────────────
+
+    /**
+     * Builds the {@link MetricsCollector} from environment.
+     *
+     * <pre>
+     * METRICS_ENABLED  — "true" (default) or "false" to disable entirely
+     * </pre>
+     *
+     * <p>The default implementation logs each measurement as a structured line
+     * via {@link EtherLog}, parseable by ELK, Loki, CloudWatch Logs Insights, etc.
+     * To use a different backend (Micrometer, OpenTelemetry, Prometheus…), implement
+     * {@link MetricsCollector} and replace this method.
+     */
+    public static MetricsCollector buildMetricsCollector() {
+        boolean enabled = !"false".equalsIgnoreCase(env("METRICS_ENABLED", "true"));
+        if (!enabled) {
+            EtherLog.info(ApplicationBootstrap.class, "Métricas deshabilitadas (METRICS_ENABLED=false).");
+            return MetricsCollector.noop();
+        }
+        EtherLog.info(ApplicationBootstrap.class,
+                "Métricas habilitadas — backend=logging (structured log lines).");
+        return new LoggingMetricsCollector();
     }
 
     // ── Env helpers ───────────────────────────────────────────────────────────

@@ -7,12 +7,17 @@ import dev.rafex.etherbrain.ports.session.ConversationState;
  *
  * <h2>Fields</h2>
  * <ul>
+ *   <li>{@code sessionId} — conversation session identifier.</li>
  *   <li>{@code memoryContext} — relevant past context retrieved from
  *       {@link dev.rafex.etherbrain.ports.memory.MemoryProvider}, injected into
  *       the prompt. Never persisted in the session store.</li>
  *   <li>{@code cancellationToken} — token checked at the start of every step.
  *       When cancelled the loop throws immediately. May be {@code null}
  *       (treated as {@link CancellationToken#noop()}).</li>
+ *   <li>{@code requestId} — short correlation ID generated per HTTP request (or
+ *       per {@link dev.rafex.etherbrain.core.runtime.AgentRuntime#run} call).
+ *       Appears in metrics tags and log lines so a single turn can be traced
+ *       end-to-end across the HTTP layer and the agent loop. May be {@code null}.</li>
  * </ul>
  *
  * <h2>Constructors (newest → oldest)</h2>
@@ -23,24 +28,33 @@ public record ExecutionContext(
         ConversationState conversationState,
         AgentConfig agentConfig,
         String memoryContext,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        String requestId
 ) {
 
-    /** Full constructor — explicit nullability for optional fields. */
+    /** Full constructor — all fields explicit. */
     public ExecutionContext {
         // cancellationToken may be null (loop checks for null before calling isCancelled)
+        // requestId may be null (metrics/logs simply omit the tag)
     }
 
-    /** With memory context, without cancellation token. */
+    /** With cancellation token, without requestId. */
+    public ExecutionContext(String sessionId, ConversationState conversationState,
+                            AgentConfig agentConfig, String memoryContext,
+                            CancellationToken cancellationToken) {
+        this(sessionId, conversationState, agentConfig, memoryContext, cancellationToken, null);
+    }
+
+    /** With memory context, without cancellation token or requestId. */
     public ExecutionContext(String sessionId, ConversationState conversationState,
                             AgentConfig agentConfig, String memoryContext) {
-        this(sessionId, conversationState, agentConfig, memoryContext, null);
+        this(sessionId, conversationState, agentConfig, memoryContext, null, null);
     }
 
-    /** Without memory context or cancellation token (original constructor). */
+    /** Without memory context, cancellation token, or requestId (original constructor). */
     public ExecutionContext(String sessionId, ConversationState conversationState,
                             AgentConfig agentConfig) {
-        this(sessionId, conversationState, agentConfig, null, null);
+        this(sessionId, conversationState, agentConfig, null, null, null);
     }
 
     /** Returns {@code true} if a cancellation has been requested. */

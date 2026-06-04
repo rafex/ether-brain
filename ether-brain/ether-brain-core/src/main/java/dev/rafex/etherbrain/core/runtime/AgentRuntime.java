@@ -2,6 +2,7 @@ package dev.rafex.etherbrain.core.runtime;
 
 import dev.rafex.etherbrain.ports.memory.MemoryProvider;
 import dev.rafex.etherbrain.ports.model.Message;
+import dev.rafex.etherbrain.ports.observability.MetricsCollector;
 import dev.rafex.etherbrain.ports.runtime.AgentConfig;
 import dev.rafex.etherbrain.ports.runtime.AgentRunner;
 import dev.rafex.etherbrain.ports.runtime.CancellationToken;
@@ -45,30 +46,33 @@ public final class AgentRuntime implements AgentRunner {
 
     private static final System.Logger LOG = System.getLogger(AgentRuntime.class.getName());
 
-    private final SessionStore   sessionStore;
-    private final AgentLoop      agentLoop;
-    private final AgentConfig    agentConfig;
-    private final MemoryProvider memoryProvider;  // null = sin memoria semántica
-    private final String         name;
-    private final String         description;
+    private final SessionStore     sessionStore;
+    private final AgentLoop        agentLoop;
+    private final AgentConfig      agentConfig;
+    private final MemoryProvider   memoryProvider;   // null = sin memoria semántica
+    private final String           name;
+    private final String           description;
+    private final MetricsCollector metrics;
 
     // ── Constructors ─────────────────────────────────────────────────────────
 
     /** Single-agent, without semantic memory (backward-compatible). */
     public AgentRuntime(SessionStore sessionStore, AgentLoop agentLoop,
                         AgentConfig agentConfig) {
-        this(sessionStore, agentLoop, agentConfig, null, "agent", "AI agent");
+        this(sessionStore, agentLoop, agentConfig, null, "agent", "AI agent",
+                MetricsCollector.noop());
     }
 
     /** Single-agent, with semantic memory. */
     public AgentRuntime(SessionStore sessionStore, AgentLoop agentLoop,
                         AgentConfig agentConfig, MemoryProvider memoryProvider) {
-        this(sessionStore, agentLoop, agentConfig, memoryProvider, "agent", "AI agent");
+        this(sessionStore, agentLoop, agentConfig, memoryProvider, "agent", "AI agent",
+                MetricsCollector.noop());
     }
 
     /**
-     * Full constructor — used when this runtime will be embedded as a sub-agent
-     * inside another via {@link AgentTool}.
+     * With name and description (used when this runtime will be embedded as a
+     * sub-agent inside another via {@link AgentTool}).
      *
      * @param name        unique agent name (used as tool name by AgentTool)
      * @param description description shown to the orchestrating model
@@ -76,12 +80,26 @@ public final class AgentRuntime implements AgentRunner {
     public AgentRuntime(SessionStore sessionStore, AgentLoop agentLoop,
                         AgentConfig agentConfig, MemoryProvider memoryProvider,
                         String name, String description) {
+        this(sessionStore, agentLoop, agentConfig, memoryProvider, name, description,
+                MetricsCollector.noop());
+    }
+
+    /**
+     * Full constructor — with metrics collector.
+     *
+     * @param metrics collector for agent-level metrics (run count, duration); use
+     *                {@link MetricsCollector#noop()} to disable
+     */
+    public AgentRuntime(SessionStore sessionStore, AgentLoop agentLoop,
+                        AgentConfig agentConfig, MemoryProvider memoryProvider,
+                        String name, String description, MetricsCollector metrics) {
         this.sessionStore   = sessionStore;
         this.agentLoop      = agentLoop;
         this.agentConfig    = agentConfig;
         this.memoryProvider = memoryProvider;
         this.name           = name;
         this.description    = description;
+        this.metrics        = metrics != null ? metrics : MetricsCollector.noop();
     }
 
     // ── AgentRunner ──────────────────────────────────────────────────────────
@@ -97,7 +115,7 @@ public final class AgentRuntime implements AgentRunner {
     /** Run without cancellation support (backward-compatible). */
     @Override
     public String run(String sessionId, String userMessage) throws Exception {
-        return runInternal(sessionId, userMessage, null, null);
+        return runInternal(sessionId, userMessage, null, null, null);
     }
 
     /**
@@ -110,7 +128,7 @@ public final class AgentRuntime implements AgentRunner {
     @Override
     public String run(String sessionId, String userMessage,
                       CancellationToken cancellationToken) throws Exception {
-        return runInternal(sessionId, userMessage, cancellationToken, null);
+        return runInternal(sessionId, userMessage, cancellationToken, null, null);
     }
 
     /**
@@ -125,14 +143,31 @@ public final class AgentRuntime implements AgentRunner {
     public String run(String sessionId, String userMessage,
                       CancellationToken cancellationToken,
                       StepListener listener) throws Exception {
-        return runInternal(sessionId, userMessage, cancellationToken, listener);
+        return runInternal(sessionId, userMessage, cancellationToken, listener, null);
+    }
+
+    /**
+     * Run with cancellation + step listener + HTTP correlation ID.
+     *
+     * <p>Used by the HTTP transport so that all metrics and log lines for this
+     * turn carry the same {@code requestId} that was returned to the caller in
+     * the {@code X-Request-ID} response header.
+     *
+     * @param requestId short correlation ID generated by the HTTP layer; may be {@code null}
+     */
+    public String run(String sessionId, String userMessage,
+                      CancellationToken cancellationToken,
+                      StepListener listener,
+                      String requestId) throws Exception {
+        return runInternal(sessionId, userMessage, cancellationToken, listener, requestId);
     }
 
     // ── Core implementation ───────────────────────────────────────────────────
 
     private String runInternal(String sessionId, String userMessage,
                                 CancellationToken cancellationToken,
-                                StepListener listener) throws Exception {
+                                StepListener listener,
+                                String requestId) throws Exception {
 
         ConversationState state = sessionStore.load(sessionId);
         state.add(new Message(Message.Role.USER, userMessage));
@@ -151,7 +186,7 @@ public final class AgentRuntime implements AgentRunner {
 
         // ── Loop del agente ───────────────────────────────────────────────────
         ExecutionContext ctx = new ExecutionContext(
-                sessionId, state, agentConfig, memCtx, cancellationToken);
+                sessionId, state, agentConfig, memCtx, cancellationToken, requestId);
         // Inject per-request step listener if provided (creates a lightweight copy of the loop)
         AgentLoop loop = (listener != null) ? agentLoop.withListener(listener) : agentLoop;
         String finalAnswer = loop.run(ctx);
