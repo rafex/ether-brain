@@ -9,6 +9,7 @@ Repositorio de documentación humana del proyecto EtherBrain.
 | [integracion-llm.md](integracion-llm.md) | Primera integración con LLM real — resultados y evidencia |
 | [arquitectura.md](arquitectura.md) | Visión general de la arquitectura hexagonal |
 | [proveedores.md](proveedores.md) | Guía de proveedores LLM soportados y sus URLs base |
+| [faiss-poc.md](faiss-poc.md) | RAG y memoria de agente con faiss-poc — configuración, upload de documentos, búsqueda semántica y memoria híbrida |
 
 ## Relación con `agents/`
 
