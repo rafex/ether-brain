@@ -13,10 +13,15 @@ import dev.rafex.etherbrain.ports.model.ModelRequest;
 import dev.rafex.etherbrain.ports.model.ModelResponse;
 import dev.rafex.etherbrain.ports.model.ToolDescriptor;
 import dev.rafex.etherbrain.ports.model.ToolRequest;
+import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpRequest.BodyPublishers;
+import java.net.http.HttpResponse;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
 
 /**
  * Codec for the Anthropic Messages API (Claude models).
@@ -208,5 +213,135 @@ public final class AnthropicCodec implements ProviderCodec {
         result.put("type",        "tool_result");
         result.put("tool_use_id", msg.toolCallId() != null ? msg.toolCallId() : "");
         result.put("content",     msg.content());
+    }
+
+    // ── Streaming ──────────────────────────────────────────────────────────────
+
+    /**
+     * Executes a streaming call using Anthropic's SSE event format ({@code "stream": true}).
+     *
+     * <h3>Wire format (simplified)</h3>
+     * <pre>
+     * event: message_start
+     * data: {"type":"message_start","message":{...}}
+     *
+     * event: content_block_start
+     * data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+     *
+     * event: content_block_delta
+     * data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}
+     *
+     * event: message_delta
+     * data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}
+     *
+     * event: message_stop
+     * data: {"type":"message_stop"}
+     * </pre>
+     * Tool calls use {@code tool_use} blocks with {@code input_json_delta} deltas.
+     */
+    @Override
+    public ModelResponse generateStreaming(ModelRequest request, HttpModelConfig config,
+                                           HttpClient httpClient,
+                                           Consumer<String> onToken) throws Exception {
+        ObjectNode body = (ObjectNode) mapper.readTree(serializeRequest(request, config));
+        body.put("stream", true);
+        String bodyStr = mapper.writeValueAsString(body);
+
+        HttpRequest httpRequest = HttpRequest.newBuilder()
+                .uri(java.net.URI.create(endpoint(config)))
+                .header("Content-Type",       "application/json")
+                .header("x-api-key",          config.apiKey())
+                .header("anthropic-version",  ANTHROPIC_VERSION)
+                .timeout(config.timeout())
+                .POST(BodyPublishers.ofString(bodyStr))
+                .build();
+
+        var response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofLines());
+
+        if (response.statusCode() != 200) {
+            String errorBody = response.body()
+                    .filter(l -> !l.isBlank())
+                    .reduce("", (a, b) -> a + b);
+            throw new RuntimeException(
+                    "Anthropic returned HTTP %d: %s".formatted(response.statusCode(), errorBody));
+        }
+
+        StringBuilder fullContent = new StringBuilder();
+        Map<Integer, AnthropicToolAccumulator> toolCalls = new LinkedHashMap<>();
+        String stopReason = null;
+
+        for (String line : (Iterable<String>) response.body()::iterator) {
+            if (!line.startsWith("data: ")) continue;
+            String data = line.substring(6).trim();
+
+            try {
+                JsonNode event = mapper.readTree(data);
+                String type = event.path("type").asText();
+
+                switch (type) {
+                    case "content_block_start" -> {
+                        JsonNode block = event.path("content_block");
+                        if ("tool_use".equals(block.path("type").asText())) {
+                            int idx = event.path("index").asInt(0);
+                            AnthropicToolAccumulator acc = new AnthropicToolAccumulator();
+                            acc.id   = block.path("id").asText();
+                            acc.name = block.path("name").asText();
+                            toolCalls.put(idx, acc);
+                        }
+                    }
+                    case "content_block_delta" -> {
+                        JsonNode delta = event.path("delta");
+                        String deltaType = delta.path("type").asText();
+                        int idx = event.path("index").asInt(0);
+
+                        if ("text_delta".equals(deltaType)) {
+                            String text = delta.path("text").asText("");
+                            if (!text.isEmpty()) {
+                                fullContent.append(text);
+                                onToken.accept(text);
+                            }
+                        } else if ("input_json_delta".equals(deltaType)) {
+                            String partial = delta.path("partial_json").asText("");
+                            toolCalls.computeIfAbsent(idx, k -> new AnthropicToolAccumulator())
+                                     .arguments.append(partial);
+                        }
+                    }
+                    case "message_delta" -> {
+                        String sr = event.path("delta").path("stop_reason").asText(null);
+                        if (sr != null && !"null".equals(sr)) stopReason = sr;
+                    }
+                    case "error" -> {
+                        String errMsg = event.path("error").path("message").asText(data);
+                        throw new RuntimeException("Anthropic streaming error: " + errMsg);
+                    }
+                    default -> { /* ignore ping, message_start, content_block_stop… */ }
+                }
+            } catch (RuntimeException e) {
+                throw e;
+            } catch (Exception ignored) {
+                // Malformed event — skip
+            }
+        }
+
+        // ── Build final response ───────────────────────────────────────────────
+        if ("tool_use".equals(stopReason) || !toolCalls.isEmpty()) {
+            List<ToolRequest> calls = toolCalls.values().stream()
+                    .map(acc -> new ToolRequest(
+                            acc.id   != null ? acc.id   : "tool-" + System.nanoTime(),
+                            acc.name != null ? acc.name : "unknown",
+                            acc.arguments.length() > 0 ? acc.arguments.toString() : "{}"))
+                    .toList();
+            return calls.size() == 1 ? calls.get(0) : new BatchedToolRequest(calls);
+        }
+        return new FinalAnswer(fullContent.toString());
+    }
+
+    @Override
+    public boolean supportsStreaming() { return true; }
+
+    private static final class AnthropicToolAccumulator {
+        String        id;
+        String        name;
+        StringBuilder arguments = new StringBuilder();
     }
 }

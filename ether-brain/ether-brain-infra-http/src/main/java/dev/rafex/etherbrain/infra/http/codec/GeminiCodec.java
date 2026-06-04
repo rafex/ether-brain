@@ -14,9 +14,12 @@ import dev.rafex.etherbrain.ports.model.ToolDescriptor;
 import dev.rafex.etherbrain.ports.model.ToolRequest;
 import java.net.URI;
 import java.net.URLEncoder;
+import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpRequest.BodyPublishers;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.util.function.Consumer;
 
 /**
  * Codec for Google Gemini API (generativelanguage.googleapis.com).
@@ -255,4 +258,96 @@ public final class GeminiCodec implements ProviderCodec {
         }
         return lastToolName != null ? lastToolName : "unknown_function";
     }
+
+    // ── Streaming ──────────────────────────────────────────────────────────────
+
+    /**
+     * Gemini streaming uses the {@code streamGenerateContent} endpoint with
+     * {@code alt=sse}. Each SSE event contains a complete JSON chunk in the same
+     * format as a non-streaming response — the chunks are accumulated and a
+     * single final {@link ModelResponse} is returned.
+     *
+     * <pre>
+     * POST {base}/v1beta/models/{model}:streamGenerateContent?alt=sse&key={apiKey}
+     *
+     * data: {"candidates":[{"content":{"parts":[{"text":"Hello"}],"role":"model"}}]}
+     * data: {"candidates":[{"content":{"parts":[{"text":" world"}],"role":"model"}}]}
+     * data: {"candidates":[{"content":{"parts":[{"text":"!"}],"role":"model"},"finishReason":"STOP"}]}
+     * </pre>
+     */
+    @Override
+    public ModelResponse generateStreaming(ModelRequest request, HttpModelConfig config,
+                                           HttpClient httpClient,
+                                           Consumer<String> onToken) throws Exception {
+        String body = serializeRequest(request, config);
+
+        // Streaming endpoint: streamGenerateContent instead of generateContent
+        String streamEndpoint = endpoint(config)
+                .replace(":generateContent", ":streamGenerateContent");
+        String url = streamEndpoint + "?alt=sse&key="
+                + URLEncoder.encode(config.apiKey(), StandardCharsets.UTF_8);
+
+        HttpRequest httpRequest = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Content-Type", "application/json")
+                .timeout(config.timeout())
+                .POST(BodyPublishers.ofString(body))
+                .build();
+
+        var response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofLines());
+
+        if (response.statusCode() != 200) {
+            String errorBody = response.body()
+                    .filter(l -> !l.isBlank())
+                    .reduce("", (a, b) -> a + b);
+            throw new RuntimeException(
+                    "Gemini returned HTTP %d: %s".formatted(response.statusCode(), errorBody));
+        }
+
+        StringBuilder fullContent = new StringBuilder();
+        ModelResponse toolResponse = null;
+
+        for (String line : (Iterable<String>) response.body()::iterator) {
+            if (!line.startsWith("data: ")) continue;
+            String data = line.substring(6).trim();
+
+            try {
+                JsonNode chunk = mapper.readTree(data);
+
+                // Check for API error embedded in chunk
+                if (chunk.has("error")) {
+                    String msg = chunk.path("error").path("message").asText(data);
+                    throw new RuntimeException("Gemini streaming error: " + msg);
+                }
+
+                JsonNode candidates = chunk.path("candidates");
+                if (!candidates.isArray() || candidates.isEmpty()) continue;
+
+                JsonNode parts = candidates.get(0).path("content").path("parts");
+                for (JsonNode part : parts) {
+                    // Tool call in a chunk — use parseResponse for full handling
+                    if (!part.path("functionCall").isMissingNode()) {
+                        toolResponse = parseResponse(data);
+                        // Don't emit tokens for tool calls
+                        break;
+                    }
+
+                    String text = part.path("text").asText(null);
+                    if (text != null && !text.isEmpty()) {
+                        fullContent.append(text);
+                        onToken.accept(text);
+                    }
+                }
+            } catch (RuntimeException e) {
+                throw e;
+            } catch (Exception ignored) {
+                // Malformed chunk — skip
+            }
+        }
+
+        return toolResponse != null ? toolResponse : new FinalAnswer(fullContent.toString());
+    }
+
+    @Override
+    public boolean supportsStreaming() { return true; }
 }

@@ -13,10 +13,15 @@ import dev.rafex.etherbrain.ports.model.ModelRequest;
 import dev.rafex.etherbrain.ports.model.ModelResponse;
 import dev.rafex.etherbrain.ports.model.ToolDescriptor;
 import dev.rafex.etherbrain.ports.model.ToolRequest;
+import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpRequest.BodyPublishers;
+import java.net.http.HttpResponse;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
 
 /**
  * OpenAI-compatible codec. Works with any provider that exposes
@@ -264,5 +269,130 @@ public final class OpenAiCodec implements ProviderCodec {
             return "{}";
         }
         return mapper.writeValueAsString(argsNode);   // object → serialize to string
+    }
+
+    // ── Streaming ──────────────────────────────────────────────────────────────
+
+    /**
+     * Executes a streaming call using OpenAI's SSE format ({@code "stream": true}).
+     *
+     * <h3>Wire format</h3>
+     * Each SSE line has the form:
+     * <pre>
+     * data: {"choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}
+     * data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+     * data: [DONE]
+     * </pre>
+     * For tool calls:
+     * <pre>
+     * data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_abc","function":{"name":"search","arguments":""}}]}}]}
+     * data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"q\":\"foo\"}"}}]}}]}
+     * data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}
+     * data: [DONE]
+     * </pre>
+     */
+    @Override
+    public ModelResponse generateStreaming(ModelRequest request, HttpModelConfig config,
+                                           HttpClient httpClient,
+                                           Consumer<String> onToken) throws Exception {
+        String body = serializeStreamingRequest(request, config);
+
+        HttpRequest.Builder streamBuilder = HttpRequest.newBuilder()
+                .uri(java.net.URI.create(endpoint(config)))
+                .header("Content-Type",  "application/json")
+                .header("Authorization", "Bearer " + config.apiKey())
+                .timeout(config.timeout());
+        config.extraHeaders().forEach(streamBuilder::header);
+        HttpRequest httpRequest = streamBuilder.POST(BodyPublishers.ofString(body)).build();
+
+        var response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofLines());
+
+        if (response.statusCode() != 200) {
+            String errorBody = response.body()
+                    .filter(l -> !l.isBlank())
+                    .reduce("", (a, b) -> a + b);
+            throw new RuntimeException(
+                    "Provider returned HTTP %d: %s".formatted(response.statusCode(), errorBody));
+        }
+
+        StringBuilder fullContent = new StringBuilder();
+        Map<Integer, ToolCallAccumulator> toolCalls = new LinkedHashMap<>();
+        String finishReason = null;
+
+        for (String line : (Iterable<String>) response.body()::iterator) {
+            if (!line.startsWith("data: ")) continue;
+            String data = line.substring(6).trim();
+            if ("[DONE]".equals(data)) break;
+
+            try {
+                JsonNode chunk  = mapper.readTree(data);
+                JsonNode choices = chunk.path("choices");
+                if (!choices.isArray() || choices.isEmpty()) continue;
+
+                JsonNode choice = choices.get(0);
+                String fr = choice.path("finish_reason").asText(null);
+                if (fr != null && !"null".equals(fr)) finishReason = fr;
+
+                JsonNode delta = choice.path("delta");
+
+                // ── Text delta ────────────────────────────────────────────────
+                String textDelta = delta.path("content").asText(null);
+                if (textDelta != null && !textDelta.isEmpty()) {
+                    fullContent.append(textDelta);
+                    onToken.accept(textDelta);
+                }
+
+                // ── Tool call deltas ──────────────────────────────────────────
+                JsonNode tcNode = delta.path("tool_calls");
+                if (tcNode.isArray()) {
+                    for (JsonNode tc : tcNode) {
+                        int idx = tc.path("index").asInt(0);
+                        ToolCallAccumulator acc = toolCalls.computeIfAbsent(idx,
+                                k -> new ToolCallAccumulator());
+                        String id   = tc.path("id").asText(null);
+                        String name = tc.path("function").path("name").asText(null);
+                        String args = tc.path("function").path("arguments").asText(null);
+                        if (id   != null) acc.id   = id;
+                        if (name != null) acc.name = name;
+                        if (args != null) acc.arguments.append(args);
+                    }
+                }
+            } catch (Exception ignored) {
+                // Malformed chunk — skip and continue
+            }
+        }
+
+        // ── Build final response ───────────────────────────────────────────────
+        if (!toolCalls.isEmpty()) {
+            List<ToolRequest> calls = toolCalls.values().stream()
+                    .map(acc -> new ToolRequest(
+                            acc.id   != null ? acc.id   : "call-" + System.nanoTime(),
+                            acc.name != null ? acc.name : "unknown",
+                            acc.arguments.length() > 0 ? acc.arguments.toString() : "{}"))
+                    .toList();
+            return calls.size() == 1 ? calls.get(0) : new BatchedToolRequest(calls);
+        }
+        return new FinalAnswer(fullContent.toString());
+    }
+
+    private String serializeStreamingRequest(ModelRequest request, HttpModelConfig config)
+            throws Exception {
+        // Re-use existing serialization then inject "stream": true
+        ObjectNode body = (ObjectNode) mapper.readTree(serializeRequest(request, config));
+        body.put("stream", true);
+        // Optional: add stream_options to get usage in the final chunk
+        // body.putObject("stream_options").put("include_usage", true);
+        return mapper.writeValueAsString(body);
+    }
+
+    @Override
+    public boolean supportsStreaming() { return true; }
+
+    // ── Inner accumulator ─────────────────────────────────────────────────────
+
+    private static final class ToolCallAccumulator {
+        String        id;
+        String        name;
+        StringBuilder arguments = new StringBuilder();
     }
 }

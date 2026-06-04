@@ -61,6 +61,18 @@ public interface StepListener {
      */
     void onError(String error);
 
+    /**
+     * Called for each text token emitted by the model during streaming.
+     * Only fired when the underlying {@link dev.rafex.etherbrain.ports.model.ModelClient}
+     * supports token streaming ({@code supportsStreaming() == true}).
+     *
+     * <p>Default implementation: no-op — override to forward tokens to the client.
+     *
+     * @param step  current step number
+     * @param token the token text (may be a single character or a short word fragment)
+     */
+    default void onToken(int step, String token) {}
+
     /** A no-op listener. Useful as a default / placeholder. */
     static StepListener noop() {
         return new StepListener() {

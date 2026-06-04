@@ -9,6 +9,7 @@ import dev.rafex.etherbrain.core.policy.DefaultPolicyEngine;
 import dev.rafex.etherbrain.core.prompt.PromptBuilder;
 import dev.rafex.etherbrain.core.tools.DefaultToolExecutor;
 import dev.rafex.etherbrain.ports.model.BatchedToolRequest;
+import java.util.function.Consumer;
 import dev.rafex.etherbrain.ports.model.FinalAnswer;
 import dev.rafex.etherbrain.ports.model.Message;
 import dev.rafex.etherbrain.ports.model.ModelClient;
@@ -215,6 +216,80 @@ class AgentLoopTest {
         String answer = loop.run(ctx("session-no-retry", state, Set.of("failer")));
         assertEquals("handled error", answer);
         assertEquals(1, attempts.get(), "Tool must only be called once with no-retry policy");
+    }
+
+    // ── Streaming (token-by-token) ────────────────────────────────────────────
+
+    @Test
+    void streamingClientEmitsTokensViaListener() throws Exception {
+        ConversationState state = new ConversationState();
+        state.add(new Message(Message.Role.USER, "stream me"));
+
+        // A model client that overrides generateStreaming with real token emission
+        ModelClient streamingClient = new ModelClient() {
+            @Override
+            public ModelResponse generate(ModelRequest req) {
+                return new FinalAnswer("streamed response");
+            }
+            @Override
+            public ModelResponse generateStreaming(ModelRequest req,
+                                                    Consumer<String> onToken) throws Exception {
+                onToken.accept("streamed ");
+                onToken.accept("response");
+                return new FinalAnswer("streamed response");
+            }
+            @Override public boolean supportsStreaming() { return true; }
+        };
+
+        List<String> tokens = new java.util.ArrayList<>();
+        StepListener listener = new StepListener() {
+            @Override public void onStepStart(int s)                                  {}
+            @Override public void onToolCall(int s, String t, String a)               {}
+            @Override public void onToolResult(int s, String t, boolean ok, String r) {}
+            @Override public void onFinalAnswer(String a)                              {}
+            @Override public void onError(String e)                                    {}
+            @Override public void onToken(int step, String token) { tokens.add(token); }
+        };
+
+        ToolRegistry registry = new TestToolRegistry(List.of());
+        AgentLoop loop = new AgentLoop(streamingClient, registry,
+                new DefaultToolExecutor(registry), new PromptBuilder(),
+                new DefaultPolicyEngine(), null, listener);
+
+        String answer = loop.run(ctx("session-stream", state, Set.of()));
+
+        assertEquals("streamed response", answer);
+        assertEquals(List.of("streamed ", "response"), tokens,
+                "Expected exactly 2 tokens in order");
+    }
+
+    @Test
+    void nonStreamingClientDoesNotCallOnToken() throws Exception {
+        ConversationState state = new ConversationState();
+        state.add(new Message(Message.Role.USER, "no stream"));
+
+        // Default ModelClient — supportsStreaming() returns false
+        ModelClient nonStreaming = request -> new FinalAnswer("blocking response");
+
+        List<String> tokens = new java.util.ArrayList<>();
+        StepListener listener = new StepListener() {
+            @Override public void onStepStart(int s)                                  {}
+            @Override public void onToolCall(int s, String t, String a)               {}
+            @Override public void onToolResult(int s, String t, boolean ok, String r) {}
+            @Override public void onFinalAnswer(String a)                              {}
+            @Override public void onError(String e)                                    {}
+            @Override public void onToken(int step, String token) { tokens.add(token); }
+        };
+
+        ToolRegistry registry = new TestToolRegistry(List.of());
+        AgentLoop loop = new AgentLoop(nonStreaming, registry,
+                new DefaultToolExecutor(registry), new PromptBuilder(),
+                new DefaultPolicyEngine(), null, listener);
+
+        String answer = loop.run(ctx("session-nostream", state, Set.of()));
+
+        assertEquals("blocking response", answer);
+        assertTrue(tokens.isEmpty(), "Non-streaming client must not emit tokens via onToken");
     }
 
     // ── StepListener (progress events) ───────────────────────────────────────

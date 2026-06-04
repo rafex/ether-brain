@@ -224,6 +224,11 @@ public final class HttpAgentServer {
                 @Override public void onStepStart(int step) {
                     trySse(out, "{\"type\":\"thinking\",\"step\":" + step + "}");
                 }
+                @Override public void onToken(int step, String token) {
+                    // Real-time token streaming — emitted for each text chunk from the LLM
+                    trySse(out, "{\"type\":\"token\",\"step\":" + step
+                            + ",\"text\":" + jsonString(token) + "}");
+                }
                 @Override public void onToolCall(int step, String tool, String args) {
                     trySse(out, "{\"type\":\"tool_call\",\"step\":" + step
                             + ",\"tool\":" + jsonString(tool)

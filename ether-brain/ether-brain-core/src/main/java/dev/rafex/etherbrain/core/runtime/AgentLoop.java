@@ -134,7 +134,7 @@ public final class AgentLoop {
                     currentStep, context.sessionId());
 
             ModelRequest  request  = promptBuilder.build(context, toolRegistry);
-            ModelResponse response = callWithTimeout(request, context.agentConfig().modelTimeout());
+            ModelResponse response = callModel(request, context.agentConfig().modelTimeout(), currentStep);
 
             // ── Final answer ──────────────────────────────────────────────────
             if (response instanceof FinalAnswer finalAnswer) {
@@ -300,6 +300,32 @@ public final class AgentLoop {
                 return new ToolResult(toolName, false, "Error: " + errorMsg);
             }
         }
+    }
+
+    // ── Model call dispatcher ─────────────────────────────────────────────────
+
+    /**
+     * Calls the model. Uses streaming when a {@link StepListener} is present AND
+     * the model client supports it; falls back to the Future-based blocking call otherwise.
+     *
+     * <p>In streaming mode the loop timeout is enforced by the HTTP client's own
+     * request timeout (configured via {@code LLM_TIMEOUT_SECONDS}), so no extra
+     * Future wrapping is needed.
+     */
+    private ModelResponse callModel(ModelRequest request, Duration timeout,
+                                     int currentStep) throws Exception {
+        if (stepListener != null && modelClient.supportsStreaming()) {
+            try {
+                return modelClient.generateStreaming(request,
+                        token -> emit(() -> stepListener.onToken(currentStep, token)));
+            } catch (Exception e) {
+                // Streaming failed — fall through to blocking call
+                EtherLog.warn(AgentLoop.class,
+                        "Streaming call failed (step {}), falling back to blocking: {}",
+                        currentStep, e.getMessage());
+            }
+        }
+        return callWithTimeout(request, timeout);
     }
 
     // ── StepListener helper ───────────────────────────────────────────────────

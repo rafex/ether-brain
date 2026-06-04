@@ -5,6 +5,7 @@ import dev.rafex.etherbrain.ports.model.ModelRequest;
 import dev.rafex.etherbrain.ports.model.ModelResponse;
 import java.net.http.HttpClient;
 import java.net.http.HttpResponse;
+import java.util.function.Consumer;
 
 public final class HttpModelClient implements ModelClient {
 
@@ -48,4 +49,31 @@ public final class HttpModelClient implements ModelClient {
             throw new RuntimeException("Failed to call model provider", e);
         }
     }
+
+    // ── Streaming call ────────────────────────────────────────────────────────
+
+    /**
+     * Calls the provider in streaming mode, emitting each text token to {@code onToken}
+     * as it arrives. Delegates to the codec's {@link ProviderCodec#generateStreaming},
+     * which handles the provider-specific SSE / chunked format.
+     *
+     * <p>If the codec does not override {@link ProviderCodec#generateStreaming} the
+     * default fallback is used: one blocking call, full content emitted as one token.
+     */
+    @Override
+    public ModelResponse generateStreaming(ModelRequest request,
+                                           Consumer<String> onToken) throws Exception {
+        try {
+            LOG.log(System.Logger.Level.INFO,
+                    "Streaming call — provider streaming={0}, model={1}",
+                    codec.supportsStreaming(), config.model());
+            return codec.generateStreaming(request, config, httpClient, onToken);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Streaming call interrupted", e);
+        }
+    }
+
+    @Override
+    public boolean supportsStreaming() { return codec.supportsStreaming(); }
 }
