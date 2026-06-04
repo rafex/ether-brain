@@ -129,12 +129,16 @@ public final class ApplicationBootstrap {
 
         Set<String> enabledTools = new HashSet<>(Set.of("echo", "current_time"));
 
-        // ── Tools externas (AGENT_TOOLS_FILE o tools.json en directorio actual) ──
-        int extCount = ExternalToolLoader.load(toolRegistry);
+        // ── Tools externas: JSON file (subprocess, http, mcp) ────────────────────
+        ExternalToolLoader.load(toolRegistry);
+
+        // ── Tools SPI: JARs en el classpath con META-INF/services ────────────────
+        ExternalToolLoader.loadFromClasspath(toolRegistry);
+
+        // Habilitar todas las tools registradas (nativas + externas + SPI)
         toolRegistry.all().stream()
-                .filter(t -> !enabledTools.contains(t.name()))
-                .filter(t -> extCount > 0)
-                .forEach(t -> enabledTools.add(t.name()));
+                .map(t -> t.name())
+                .forEach(enabledTools::add);
         Map<String, RemoteServiceConfig> remoteServices = new HashMap<>();
 
         // ── faiss-poc (activado si FAISS_BASE_URL está definido) ─────────────
