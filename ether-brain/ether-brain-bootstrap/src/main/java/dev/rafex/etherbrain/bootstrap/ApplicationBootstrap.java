@@ -1,10 +1,15 @@
 package dev.rafex.etherbrain.bootstrap;
 
 import dev.rafex.etherbrain.core.policy.DefaultPolicyEngine;
+import dev.rafex.etherbrain.core.policy.DefaultRetryPolicy;
 import dev.rafex.etherbrain.core.prompt.PromptBuilder;
 import dev.rafex.etherbrain.core.runtime.AgentLoop;
 import dev.rafex.etherbrain.core.runtime.AgentRuntime;
+import dev.rafex.etherbrain.core.runtime.AgentTool;
+import dev.rafex.etherbrain.core.runtime.LocalAgentRegistry;
 import dev.rafex.etherbrain.core.tools.DefaultToolExecutor;
+import dev.rafex.etherbrain.ports.policy.RetryPolicy;
+import dev.rafex.etherbrain.ports.runtime.AgentRegistry;
 import dev.rafex.ether.logging.core.config.LoggingConfigurator;
 import dev.rafex.etherbrain.infra.file.FileSessionStore;
 import dev.rafex.etherbrain.infra.http.HttpModelClient;
@@ -114,6 +119,12 @@ import java.util.logging.Level;
  */
 public final class ApplicationBootstrap {
 
+    /** Shared agent registry — available to all tools via static accessor. */
+    private static final LocalAgentRegistry AGENT_REGISTRY = new LocalAgentRegistry();
+
+    /** Returns the global agent registry (read-only after bootstrap). */
+    public static AgentRegistry agentRegistry() { return AGENT_REGISTRY; }
+
     public AgentRuntime bootstrap() {
         loadDotEnv();         // carga .env antes de leer cualquier variable
         configureLogging();
@@ -195,15 +206,59 @@ public final class ApplicationBootstrap {
                 Map.copyOf(remoteServices),
                 systemPrompt);
 
+        // ── Retry policy ──────────────────────────────────────────────────────
+        RetryPolicy retryPolicy = buildRetryPolicy();
+
         AgentLoop agentLoop = new AgentLoop(
                 modelClient,
                 toolRegistry,
                 new DefaultToolExecutor(toolRegistry),
                 new PromptBuilder(),
-                new DefaultPolicyEngine()
+                new DefaultPolicyEngine(),
+                retryPolicy
         );
 
-        return new AgentRuntime(sessionStore, agentLoop, agentConfig, memoryProvider);
+        // ── Agent name and description ────────────────────────────────────────
+        String agentName = env("AGENT_NAME", "agent");
+        String agentDesc = env("AGENT_DESCRIPTION",
+                "AI agent powered by EtherBrain. Delegates complex sub-tasks when needed.");
+
+        AgentRuntime runtime = new AgentRuntime(
+                sessionStore, agentLoop, agentConfig, memoryProvider, agentName, agentDesc);
+
+        // ── Register this agent in the global registry ────────────────────────
+        AGENT_REGISTRY.register(runtime);
+
+        // ── Sub-agents from AGENT_SUB_* env vars ─────────────────────────────
+        // AGENT_SUB_0=name:description — future extension point (stub for now)
+        // Full multi-agent config requires each sub-agent to have its own
+        // LLM_URL, etc. See docs/multi-agent.md for topology patterns.
+
+        // ── Register sub-agents already in registry as tools ─────────────────
+        // (populated by external callers before bootstrap finishes)
+        AGENT_REGISTRY.all().stream()
+                .filter(r -> !r.agentName().equals(agentName))  // skip self
+                .forEach(subAgent -> {
+                    toolRegistry.register(new AgentTool(subAgent));
+                    enabledTools.add(subAgent.agentName());
+                    System.out.println("[EtherBrain] sub-agent tool: " + subAgent.agentName());
+                });
+
+        return runtime;
+    }
+
+    /**
+     * Register a sub-agent before calling {@link #bootstrap()} so it is
+     * automatically exposed as a tool to the main agent.
+     *
+     * <pre>{@code
+     * AgentRuntime researcher = new ApplicationBootstrap().buildSubAgent(...);
+     * ApplicationBootstrap.registerSubAgent(researcher);
+     * AgentRuntime orchestrator = new ApplicationBootstrap().bootstrap();
+     * }</pre>
+     */
+    public static void registerSubAgent(AgentRuntime subAgent) {
+        AGENT_REGISTRY.register(subAgent);
     }
 
     /** @deprecated Use {@link #bootstrap()} — reads configuration from environment. */
@@ -410,6 +465,25 @@ public final class ApplicationBootstrap {
         Path parent = Path.of("../.env");
         if (Files.exists(parent)) return parent;
         return null;
+    }
+
+    // ── Retry policy ─────────────────────────────────────────────────────────
+
+    /**
+     * Builds the tool retry policy from environment variables:
+     * <pre>
+     * AGENT_RETRY_MAX      — max retries per tool (default: 0 = no retry)
+     * AGENT_RETRY_DELAY_MS — ms between retries (default: 500)
+     * </pre>
+     */
+    private static RetryPolicy buildRetryPolicy() {
+        int  maxRetries = (int) parseLong(env("AGENT_RETRY_MAX",      "0"),   0);
+        long delayMs    =       parseLong(env("AGENT_RETRY_DELAY_MS", "500"), 500);
+        if (maxRetries > 0) {
+            System.out.println("[EtherBrain] retry policy: max=" + maxRetries
+                    + " delay=" + delayMs + "ms");
+        }
+        return new DefaultRetryPolicy(maxRetries, delayMs);
     }
 
     // ── Env helpers ───────────────────────────────────────────────────────────
