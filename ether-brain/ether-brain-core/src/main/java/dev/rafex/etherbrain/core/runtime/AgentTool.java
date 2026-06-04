@@ -1,11 +1,10 @@
 package dev.rafex.etherbrain.core.runtime;
 
+import dev.rafex.etherbrain.common.JsonUtils;
 import dev.rafex.etherbrain.ports.runtime.AgentRunner;
 import dev.rafex.etherbrain.ports.runtime.ExecutionContext;
 import dev.rafex.etherbrain.ports.tools.Tool;
 import dev.rafex.etherbrain.ports.tools.ToolResult;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Wraps an {@link AgentRunner} as a {@link Tool} so that one agent can
@@ -86,14 +85,14 @@ public final class AgentTool implements Tool {
     public ToolResult execute(String arguments, ExecutionContext context) throws Exception {
         String json = arguments == null ? "{}" : arguments;
 
-        String message = extractField(json, "message");
+        String message = JsonUtils.extractField(json, "message");
         if (message == null || message.isBlank()) {
             return new ToolResult(name(), false,
                     "AgentTool '" + name() + "': 'message' argument is required.");
         }
 
         // Sub-session: isolated from parent, deterministic name
-        String subSession = extractField(json, "session_id");
+        String subSession = JsonUtils.extractField(json, "session_id");
         if (subSession == null || subSession.isBlank()) {
             subSession = context.sessionId() + ":" + runner.agentName();
         }
@@ -108,25 +107,10 @@ public final class AgentTool implements Tool {
         }
     }
 
-    // ── Simple JSON field extractor (no external dependencies) ────────────────
-
-    private static final Pattern FIELD_PATTERN =
-            Pattern.compile("\"([^\"]+)\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
-
     /**
-     * Extracts a string field value from a simple JSON object.
-     * Does not support nested objects — sufficient for AgentTool input.
+     * Delegates to {@link JsonUtils#extractField} — kept package-private for tests.
      */
     static String extractField(String json, String fieldName) {
-        if (json == null || json.isBlank()) return null;
-        Matcher m = Pattern.compile(
-                "\"" + Pattern.quote(fieldName) + "\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")
-                .matcher(json);
-        if (!m.find()) return null;
-        return m.group(1)
-                .replace("\\\"", "\"")
-                .replace("\\n",  "\n")
-                .replace("\\t",  "\t")
-                .replace("\\\\", "\\");
+        return JsonUtils.extractField(json, fieldName);
     }
 }

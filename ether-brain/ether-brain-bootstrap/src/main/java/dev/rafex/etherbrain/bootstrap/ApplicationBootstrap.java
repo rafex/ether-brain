@@ -1,5 +1,6 @@
 package dev.rafex.etherbrain.bootstrap;
 
+import dev.rafex.ether.logging.core.config.LoggingConfigurator;
 import dev.rafex.ether.logging.core.logger.EtherLog;
 import dev.rafex.etherbrain.core.observability.LoggingMetricsCollector;
 import dev.rafex.etherbrain.core.policy.DefaultPolicyEngine;
@@ -10,42 +11,24 @@ import dev.rafex.etherbrain.core.runtime.AgentRuntime;
 import dev.rafex.etherbrain.core.runtime.AgentTool;
 import dev.rafex.etherbrain.core.runtime.LocalAgentRegistry;
 import dev.rafex.etherbrain.core.tools.DefaultToolExecutor;
+import dev.rafex.etherbrain.ports.auth.TokenProvider;
+import dev.rafex.etherbrain.ports.memory.MemoryProvider;
+import dev.rafex.etherbrain.ports.model.ModelClient;
 import dev.rafex.etherbrain.ports.observability.MetricsCollector;
 import dev.rafex.etherbrain.ports.policy.RetryPolicy;
-import dev.rafex.etherbrain.ports.runtime.AgentRegistry;
-import dev.rafex.ether.logging.core.config.LoggingConfigurator;
-import dev.rafex.etherbrain.infra.file.FileSessionStore;
-import dev.rafex.etherbrain.infra.http.HttpModelClient;
-import dev.rafex.etherbrain.infra.http.HttpModelConfig;
-import dev.rafex.etherbrain.infra.http.ProviderCodec;
-import dev.rafex.etherbrain.infra.http.codec.AnthropicCodec;
-import dev.rafex.etherbrain.infra.http.codec.BedrockCodec;
-import dev.rafex.etherbrain.infra.http.codec.GeminiCodec;
-import dev.rafex.etherbrain.infra.http.codec.OpenAiCodec;
-import dev.rafex.etherbrain.infra.memory.InMemorySessionStore;
-import dev.rafex.etherbrain.ports.auth.TokenProvider;
-import dev.rafex.etherbrain.ports.model.FinalAnswer;
-import dev.rafex.etherbrain.ports.model.Message;
-import dev.rafex.etherbrain.ports.model.ModelClient;
-import dev.rafex.etherbrain.ports.model.ModelRequest;
-import dev.rafex.etherbrain.ports.model.ModelResponse;
-import dev.rafex.etherbrain.ports.model.ToolRequest;
 import dev.rafex.etherbrain.ports.runtime.AgentConfig;
+import dev.rafex.etherbrain.ports.runtime.AgentRegistry;
 import dev.rafex.etherbrain.ports.runtime.RemoteServiceConfig;
 import dev.rafex.etherbrain.ports.session.SessionStore;
 import dev.rafex.etherbrain.tools.local.CurrentTimeTool;
 import dev.rafex.etherbrain.tools.local.EchoTool;
 import dev.rafex.etherbrain.tools.local.ExternalToolLoader;
 import dev.rafex.etherbrain.tools.local.InMemoryToolRegistry;
-import dev.rafex.etherbrain.ports.memory.MemoryProvider;
 import dev.rafex.etherbrain.tools.remote.FaissMemoryProvider;
 import dev.rafex.etherbrain.tools.remote.FaissTokenManager;
 import dev.rafex.etherbrain.tools.remote.KnowledgeSearchTool;
 import dev.rafex.etherbrain.tools.remote.MemoryCommitTool;
-import java.io.IOException;
 import java.net.URI;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -71,8 +54,8 @@ import java.util.logging.Level;
  *                                  Ollama, LM Studio, vLLM y cualquier
  *                                  endpoint /v1/chat/completions
  * anthropic    AnthropicCodec ✅   Anthropic Claude (API directa o proxy)
- * gemini       GeminiCodec ⏳      Google Gemini (pendiente de implementar)
- * bedrock      BedrockCodec ⏳     AWS Bedrock (pendiente de implementar)
+ * gemini       GeminiCodec ✅      Google Gemini / AI Platform (streaming SSE)
+ * bedrock      BedrockCodec ✅     AWS Bedrock (sin streaming nativo — fallback bloqueante)
  * </pre>
  * <p>Si {@code LLM_TYPE} no está definido se intenta inferir del path de la URL
  * como fallback, y si tampoco coincide se usa {@code openai} por defecto.
@@ -122,20 +105,31 @@ import java.util.logging.Level;
  */
 public final class ApplicationBootstrap {
 
-    /** Shared agent registry — available to all tools via static accessor. */
-    private static final LocalAgentRegistry AGENT_REGISTRY = new LocalAgentRegistry();
+    /**
+     * Per-instance agent registry.
+     *
+     * <p>Changed from {@code static final} to an instance field so that:
+     * <ul>
+     *   <li>Multiple independent runtimes can co-exist in the same JVM (e.g. tests).</li>
+     *   <li>Tests no longer share state between runs.</li>
+     *   <li>The bootstrap is fully garbage-collectible when no longer needed.</li>
+     * </ul>
+     */
+    private final LocalAgentRegistry agentRegistry = new LocalAgentRegistry();
 
-    /** Returns the global agent registry (read-only after bootstrap). */
-    public static AgentRegistry agentRegistry() { return AGENT_REGISTRY; }
+    /** Returns this bootstrap's agent registry. */
+    public AgentRegistry agentRegistry() { return agentRegistry; }
 
     public AgentRuntime bootstrap() {
-        loadDotEnv();         // carga .env antes de leer cualquier variable
+        DotEnvLoader.load();   // carga .env antes de leer cualquier variable
         configureLogging();
 
         // LLM_TIMEOUT_SECONDS — leído aquí para pasar a ModelClient y AgentConfig
         long timeoutSecs0 = parseLong(env("LLM_TIMEOUT_SECONDS", "60"), 60);
-        ModelClient modelClient = buildModelClient(java.time.Duration.ofSeconds(timeoutSecs0));
-        SessionStore sessionStore = buildSessionStore();
+        java.time.Duration timeout = java.time.Duration.ofSeconds(timeoutSecs0);
+
+        ModelClient  modelClient  = ModelClientFactory.build(timeout);
+        SessionStore sessionStore = SessionStoreFactory.build();
 
         InMemoryToolRegistry toolRegistry = new InMemoryToolRegistry()
                 .register(new EchoTool())
@@ -202,8 +196,6 @@ public final class ApplicationBootstrap {
         String systemPrompt = env("AGENT_SYSTEM_PROMPT", AgentConfig.DEFAULT_SYSTEM_PROMPT);
 
         int maxSteps = (int) parseLong(env("AGENT_MAX_STEPS", "8"), 8);
-        java.time.Duration timeout = java.time.Duration.ofSeconds(
-                parseLong(env("LLM_TIMEOUT_SECONDS", "60"), 60));
 
         AgentConfig agentConfig = new AgentConfig(
                 maxSteps, timeout,
@@ -236,7 +228,7 @@ public final class ApplicationBootstrap {
                 agentName, agentDesc, metrics);
 
         // ── Register this agent in the global registry ────────────────────────
-        AGENT_REGISTRY.register(runtime);
+        agentRegistry.register(runtime);
 
         // ── Sub-agents from AGENT_SUB_* env vars ─────────────────────────────
         // AGENT_SUB_0=name:description — future extension point (stub for now)
@@ -245,7 +237,7 @@ public final class ApplicationBootstrap {
 
         // ── Register sub-agents already in registry as tools ─────────────────
         // (populated by external callers before bootstrap finishes)
-        AGENT_REGISTRY.all().stream()
+        agentRegistry.all().stream()
                 .filter(r -> !r.agentName().equals(agentName))  // skip self
                 .forEach(subAgent -> {
                     toolRegistry.register(new AgentTool(subAgent));
@@ -263,17 +255,18 @@ public final class ApplicationBootstrap {
     }
 
     /**
-     * Register a sub-agent before calling {@link #bootstrap()} so it is
+     * Registers a sub-agent before calling {@link #bootstrap()} so it is
      * automatically exposed as a tool to the main agent.
      *
      * <pre>{@code
-     * AgentRuntime researcher = new ApplicationBootstrap().buildSubAgent(...);
-     * ApplicationBootstrap.registerSubAgent(researcher);
-     * AgentRuntime orchestrator = new ApplicationBootstrap().bootstrap();
+     * ApplicationBootstrap bootstrap = new ApplicationBootstrap();
+     * AgentRuntime researcher = buildResearcher();
+     * bootstrap.registerSubAgent(researcher);          // instance method
+     * AgentRuntime orchestrator = bootstrap.bootstrap();
      * }</pre>
      */
-    public static void registerSubAgent(AgentRuntime subAgent) {
-        AGENT_REGISTRY.register(subAgent);
+    public void registerSubAgent(AgentRuntime subAgent) {
+        agentRegistry.register(subAgent);
     }
 
     /** @deprecated Use {@link #bootstrap()} — reads configuration from environment. */
@@ -282,106 +275,7 @@ public final class ApplicationBootstrap {
         return bootstrap();
     }
 
-    // ── Model client ──────────────────────────────────────────────────────────
-
-    private static ModelClient buildModelClient(java.time.Duration timeout) {
-        String llmUrl   = System.getenv("LLM_URL");
-        String llmToken = env("LLM_TOKEN", "");
-        String llmModel = env("LLM_MODEL", "");
-
-        if (llmUrl == null || llmUrl.isBlank()) {
-            EtherLog.warn(ApplicationBootstrap.class,
-                    "LLM_URL no definida — modo demo (sin LLM real).");
-            return new DemoModelClient();
-        }
-        if (llmModel.isBlank()) {
-            throw new IllegalStateException(
-                    "LLM_URL está definida pero falta LLM_MODEL.");
-        }
-
-        int maxTokens = (int) parseLong(env("LLM_MAX_TOKENS", "4096"), 4096);
-
-        // timeout unificado: mismo valor para HTTP y para el Future del loop
-        HttpModelConfig config = new HttpModelConfig(
-                URI.create(llmUrl), llmToken, llmModel, maxTokens, timeout);
-
-        ProviderCodec codec = resolveCodec(llmUrl);
-        String llmType = env("LLM_TYPE", "openai");
-        EtherLog.info(ApplicationBootstrap.class,
-                "LLM → {} | tipo={} | modelo={} | maxTokens={} | timeout={}s",
-                llmUrl, llmType, llmModel, maxTokens, timeout.toSeconds());
-        return new HttpModelClient(config, codec);
-    }
-
-    /**
-     * Resuelve el codec con esta cadena de prioridad:
-     * <ol>
-     *   <li>{@code LLM_TYPE} explícito (recomendado)</li>
-     *   <li>Inferencia desde el hostname de {@code LLM_URL} (fallback)</li>
-     *   <li>{@code OpenAiCodec} como default</li>
-     * </ol>
-     *
-     * <p>Valores válidos de {@code LLM_TYPE}:
-     * {@code openai} | {@code anthropic} | {@code gemini} | {@code bedrock}.
-     */
-    private static ProviderCodec resolveCodec(String llmUrl) {
-        String llmType = env("LLM_TYPE", "").toLowerCase();
-
-        // 1 — LLM_TYPE explícito
-        if (!llmType.isBlank()) {
-            return switch (llmType) {
-                case "openai"    -> new OpenAiCodec();
-                case "anthropic" -> new AnthropicCodec();
-                case "gemini"    -> new GeminiCodec();
-                case "bedrock"   -> new BedrockCodec();
-                default -> throw new IllegalArgumentException(
-                        "LLM_TYPE=\"" + llmType + "\" no reconocido. " +
-                        "Valores válidos: openai | anthropic | gemini | bedrock");
-            };
-        }
-
-        // 2 — inferencia por hostname (LLM_URL es URL base, no tiene path)
-        String host = llmUrl.toLowerCase();
-        if (host.contains("anthropic.com")) {
-            EtherLog.warn(ApplicationBootstrap.class,
-                    "LLM_TYPE no definido — inferido 'anthropic' del hostname. Añade LLM_TYPE=anthropic.");
-            return new AnthropicCodec();
-        }
-        if (host.contains("generativelanguage.googleapis.com") ||
-            host.contains("aiplatform.googleapis.com")) {
-            EtherLog.warn(ApplicationBootstrap.class,
-                    "LLM_TYPE no definido — inferido 'gemini' del hostname. Añade LLM_TYPE=gemini.");
-            return new GeminiCodec();
-        }
-        if (host.contains("amazonaws.com")) {
-            EtherLog.warn(ApplicationBootstrap.class,
-                    "LLM_TYPE no definido — inferido 'bedrock' del hostname. Añade LLM_TYPE=bedrock.");
-            return new BedrockCodec();
-        }
-
-        // 3 — default: OpenAI-compatible (cubre la mayoría del mercado)
-        return new OpenAiCodec();
-    }
-
-    // warn() removed — callers now use EtherLog.warn() directly.
-
-    // ── Session store ─────────────────────────────────────────────────────────
-
-    private static SessionStore buildSessionStore() {
-        String dir = System.getenv("SESSION_DIR");
-        if (dir == null || dir.isBlank()) {
-            EtherLog.info(ApplicationBootstrap.class,
-                    "SESSION_DIR no definido — sesiones en memoria (no persistentes).");
-            return new InMemorySessionStore();
-        }
-
-        // SESSION_TTL_HOURS — horas de vida de una sesión (0 = sin límite)
-        long ttlHours = parseLong(env("SESSION_TTL_HOURS", "0"), 0);
-        java.time.Duration ttl = ttlHours > 0
-                ? java.time.Duration.ofHours(ttlHours)
-                : FileSessionStore.NO_TTL;
-        return new FileSessionStore(Path.of(dir), ttl);
-    }
+    // Model client and session store are built by ModelClientFactory and SessionStoreFactory.
 
     // ── faiss-poc auth ────────────────────────────────────────────────────────
 
@@ -436,63 +330,8 @@ public final class ApplicationBootstrap {
      * LLM_MODEL=claude-haiku-4-5
      * </pre>
      */
-    public static void loadDotEnv() {
-        Path envFile = resolveEnvFile();
-        if (envFile == null) return;
-
-        try {
-            int loaded = 0;
-            for (String line : Files.readAllLines(envFile)) {
-                line = line.strip();
-                if (line.isEmpty() || line.startsWith("#")) continue;
-
-                int eq = line.indexOf('=');
-                if (eq <= 0) continue;
-
-                String key   = line.substring(0, eq).strip();
-                String value = line.substring(eq + 1).strip();
-
-                // Quitar comillas opcionales: "valor" o 'valor'
-                if (value.length() >= 2 &&
-                    ((value.startsWith("\"") && value.endsWith("\"")) ||
-                     (value.startsWith("'")  && value.endsWith("'")))) {
-                    value = value.substring(1, value.length() - 1);
-                }
-
-                // Las variables reales del SO tienen prioridad
-                if (System.getenv(key) == null) {
-                    System.setProperty(key, value);
-                    loaded++;
-                }
-            }
-            if (loaded > 0) {
-                EtherLog.info(ApplicationBootstrap.class,
-                        ".env cargado: {} ({} variables)", envFile, loaded);
-            }
-        } catch (IOException e) {
-            EtherLog.warn(ApplicationBootstrap.class,
-                    "No se pudo leer .env: {} — {}", envFile, e.getMessage());
-        }
-    }
-
-    private static Path resolveEnvFile() {
-        // 1. ENV_FILE explícito
-        String explicit = System.getenv("ENV_FILE");
-        if (explicit != null && !explicit.isBlank()) {
-            Path p = Path.of(explicit);
-            if (Files.exists(p)) return p;
-            EtherLog.warn(ApplicationBootstrap.class,
-                    "ENV_FILE definido pero no existe: {}", p);
-            return null;
-        }
-        // 2. .env en el directorio actual
-        Path cwd = Path.of(".env");
-        if (Files.exists(cwd)) return cwd;
-        // 3. ../.env (cuando se ejecuta desde un submódulo Maven)
-        Path parent = Path.of("../.env");
-        if (Files.exists(parent)) return parent;
-        return null;
-    }
+    /** @see DotEnvLoader#load() */
+    public static void loadDotEnv() { DotEnvLoader.load(); }
 
     // ── Retry policy ─────────────────────────────────────────────────────────
 
@@ -559,30 +398,5 @@ public final class ApplicationBootstrap {
         return (value != null && !value.isBlank()) ? value : defaultValue;
     }
 
-    // ── Demo client (sin LLM real) ────────────────────────────────────────────
-
-    static final class DemoModelClient implements ModelClient {
-
-        @Override
-        public ModelResponse generate(ModelRequest request) {
-            boolean hasToolResult = request.messages().stream()
-                    .anyMatch(m -> m.role() == Message.Role.TOOL);
-
-            if (hasToolResult) {
-                String content = request.messages().stream()
-                        .filter(m -> m.role() == Message.Role.TOOL)
-                        .reduce((a, b) -> b)
-                        .map(Message::content)
-                        .orElse("(empty)");
-                return new FinalAnswer("Resultado de tool: " + content);
-            }
-
-            Message latest = request.messages().getLast();
-            String content = latest.content().toLowerCase();
-            if (content.contains("time") || content.contains("hora")) {
-                return new ToolRequest("current_time", "{}");
-            }
-            return new ToolRequest("echo", latest.content());
-        }
-    }
+    // Stub model client extracted to StubModelClient.java
 }

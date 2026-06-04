@@ -1,5 +1,6 @@
 package dev.rafex.etherbrain.infra.http.codec;
 
+import dev.rafex.etherbrain.common.MessageConstants;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -190,10 +191,10 @@ public final class AnthropicCodec implements ProviderCodec {
     }
 
     private void addAssistantToolCall(ArrayNode messages, Message msg) throws Exception {
-        // Domain internal format: "toolName|arguments"
-        String[] parts    = msg.content().split("\\|", 2);
-        String toolName   = parts[0];
-        String arguments  = parts.length > 1 ? parts[1] : "{}";
+        // Domain internal format: "toolNamearguments" (legacy: "toolName|arguments")
+        String[] parts   = MessageConstants.splitToolCall(msg.content());
+        String toolName  = parts[0];
+        String arguments = parts[1];
 
         ObjectNode m = messages.addObject();
         m.put("role", "assistant");

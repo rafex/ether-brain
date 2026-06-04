@@ -1,6 +1,7 @@
 package dev.rafex.etherbrain.core.runtime;
 
 import dev.rafex.etherbrain.common.AgentException;
+import dev.rafex.etherbrain.common.MessageConstants;
 import dev.rafex.etherbrain.core.prompt.PromptBuilder;
 import dev.rafex.etherbrain.ports.model.BatchedToolRequest;
 import dev.rafex.etherbrain.ports.model.FinalAnswer;
@@ -213,7 +214,7 @@ public final class AgentLoop {
 
                 context.conversationState().add(new Message(
                         Message.Role.ASSISTANT,
-                        toolRequest.toolName() + "|" + toolRequest.arguments(),
+                        toolRequest.toolName() + MessageConstants.TOOL_CALL_SEP + toolRequest.arguments(),
                         callId));
 
                 Instant toolStart = Instant.now();
@@ -286,7 +287,7 @@ public final class AgentLoop {
             emit(() -> stepListener.onToolCall(currentStep, tr.toolName(), tr.arguments()));
             context.conversationState().add(new Message(
                     Message.Role.ASSISTANT,
-                    tr.toolName() + "|" + tr.arguments(),
+                    tr.toolName() + MessageConstants.TOOL_CALL_SEP + tr.arguments(),
                     callId));
         }
 

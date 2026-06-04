@@ -1,5 +1,6 @@
 package dev.rafex.etherbrain.infra.http.codec;
 
+import dev.rafex.etherbrain.common.MessageConstants;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -163,10 +164,10 @@ public final class GeminiCodec implements ProviderCodec {
                 case SYSTEM  -> { /* ya en systemInstruction */ }
                 case ASSISTANT -> {
                     if (msg.toolCallId() != null) {
-                        // "toolName|arguments"
-                        String[] split = msg.content().split("\\|", 2);
+                        // "toolNamearguments" (legacy: "toolName|arguments")
+                        String[] split = MessageConstants.splitToolCall(msg.content());
                         lastToolName = split[0];
-                        String arguments = split.length > 1 ? split[1] : "{}";
+                        String arguments = split[1];
                         addModelFunctionCall(contents, lastToolName, arguments);
                     } else {
                         lastToolName = null;

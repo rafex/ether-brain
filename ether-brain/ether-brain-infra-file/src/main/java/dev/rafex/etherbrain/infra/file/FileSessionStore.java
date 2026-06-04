@@ -14,7 +14,6 @@ import java.nio.file.attribute.FileTime;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
@@ -28,17 +27,34 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * intervalo se tratan como nuevas (el archivo no se elimina pero se ignora).
  * Configurar via {@code SESSION_TTL_HOURS} en el entorno o con el constructor
  * de dos argumentos.
+ *
+ * <h2>Locking strategy — striped read/write locks</h2>
+ * Instead of one lock per session ID (which would grow unbounded in a long-running
+ * process and eventually cause OOM), a fixed-size stripe array is used.  Session IDs
+ * are hashed to an index in the range {@code [0, LOCK_STRIPES)}.  The default of
+ * 256 stripes means at most 256 sessions can contend at one time; the probability
+ * that two <em>different</em> sessions map to the same stripe is {@code 1/256 ≈ 0.4 %}.
  */
 public final class FileSessionStore implements SessionStore {
 
     /** Sin TTL — sesiones viven indefinidamente. */
     public static final Duration NO_TTL = Duration.ZERO;
 
+    /**
+     * Number of lock stripes.  Must be a power of two for the modulo to work
+     * correctly with negative hash codes.
+     */
+    private static final int LOCK_STRIPES = 256;
+
     private final Path baseDir;
     private final Duration maxAge;
     private final ObjectMapper mapper;
-    private final ConcurrentHashMap<String, ReentrantReadWriteLock> locks =
-            new ConcurrentHashMap<>();
+
+    /**
+     * Fixed-size striped lock array — O(1) space, no memory leak.
+     * Index is derived from {@code Math.abs(sessionId.hashCode()) % LOCK_STRIPES}.
+     */
+    private final ReentrantReadWriteLock[] stripes;
 
     /** Crea un store sin TTL (sesiones permanentes). */
     public FileSessionStore(Path baseDir) {
@@ -59,6 +75,10 @@ public final class FileSessionStore implements SessionStore {
         this.baseDir = baseDir;
         this.maxAge  = maxAge == null ? NO_TTL : maxAge;
         this.mapper  = new ObjectMapper();
+        this.stripes = new ReentrantReadWriteLock[LOCK_STRIPES];
+        for (int i = 0; i < LOCK_STRIPES; i++) {
+            this.stripes[i] = new ReentrantReadWriteLock();
+        }
     }
 
     @Override
@@ -115,8 +135,14 @@ public final class FileSessionStore implements SessionStore {
         }
     }
 
+    /**
+     * Maps a session ID to one of the {@link #LOCK_STRIPES} pre-allocated locks.
+     * Uses bitwise AND with {@code (LOCK_STRIPES - 1)} (power of two) to avoid
+     * the sign issue that would arise from plain {@code %} with negative hash codes.
+     */
     private ReentrantReadWriteLock lockFor(String sessionId) {
-        return locks.computeIfAbsent(sessionId, ignored -> new ReentrantReadWriteLock());
+        int idx = sessionId.hashCode() & (LOCK_STRIPES - 1);
+        return stripes[idx];
     }
 
     // ── DTOs (infra-only, no Jackson annotations on domain classes) ──────────
