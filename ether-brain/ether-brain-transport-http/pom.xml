@@ -20,15 +20,14 @@
             <version>${project.version}</version>
         </dependency>
         <!--
-          Jetty 12 Core API — replaces com.sun.net.httpserver.
-          Provides TLS/HTTPS, HTTP/2 (via jetty-alpn), proper thread pools.
-          Version 12.1.7 is the latest stable 12.1.x line as of 2026-06.
-          Upgrade to 12.1.10 when published (API-compatible).
+          Jetty 12.1 Core API — replaces com.sun.net.httpserver.
+          Version managed by jetty-bom imported in the parent POM.
+          Provides TLS/HTTPS (HTTPS_PORT), HTTP/2 (add jetty-alpn-java-server),
+          VirtualThreadPool, and proper Callback-based async I/O.
         -->
         <dependency>
             <groupId>org.eclipse.jetty</groupId>
             <artifactId>jetty-server</artifactId>
-            <version>12.1.7</version>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>

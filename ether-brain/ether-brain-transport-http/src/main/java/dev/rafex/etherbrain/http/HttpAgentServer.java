@@ -36,7 +36,7 @@ import java.util.regex.Pattern;
 /**
  * Servidor HTTP que expone el runtime EtherBrain como API REST.
  *
- * <p>Construido sobre <strong>Jetty 12.1 Core API</strong> — reemplaza
+ * <p>Construido sobre <strong>Jetty 12.1.10 Core API</strong> — reemplaza
  * {@code com.sun.net.httpserver} (JDK interno) para proveer:
  * <ul>
  *   <li>TLS/HTTPS nativo vía {@code HTTPS_PORT} + {@code HTTPS_KEYSTORE_*}</li>
