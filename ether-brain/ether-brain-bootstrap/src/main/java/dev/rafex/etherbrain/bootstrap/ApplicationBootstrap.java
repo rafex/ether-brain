@@ -28,12 +28,21 @@ import dev.rafex.etherbrain.tools.remote.FaissMemoryProvider;
 import dev.rafex.etherbrain.tools.remote.FaissTokenManager;
 import dev.rafex.etherbrain.tools.remote.KnowledgeSearchTool;
 import dev.rafex.etherbrain.tools.remote.MemoryCommitTool;
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
+import java.util.logging.FileHandler;
 import java.util.logging.Level;
+import java.util.logging.Logger;
+import dev.rafex.ether.logging.core.format.EtherLogFormatter;
 
 /**
  * Assembles the EtherBrain runtime from environment variables.
@@ -297,13 +306,142 @@ public final class ApplicationBootstrap {
 
     // ── Logging ───────────────────────────────────────────────────────────────
 
+    /**
+     * Configura el sistema de logging con esta prioridad:
+     * <ol>
+     *   <li>Aplica niveles por paquete desde {@code logging.properties} en el
+     *       classpath (silencia Jetty, Paho, Jackson…)</li>
+     *   <li>Configura el root logger con el nivel de {@code LOG_LEVEL} y un
+     *       {@code ConsoleHandler} formateado.</li>
+     *   <li>Si {@code LOG_FILE} está definido, añade un {@code FileHandler}
+     *       con rotación automática al root logger.</li>
+     * </ol>
+     *
+     * <h2>Variables de entorno</h2>
+     * <pre>
+     * LOG_LEVEL           — OFF | SEVERE | WARNING | INFO | FINE | ALL (default: INFO)
+     * LOG_FILE            — ruta del archivo de log, ej. /var/log/etherbrain/app.log
+     *                       Soporta patrones JUL: %g (generación), %u (único), %h (home)
+     * LOG_FILE_MAX_BYTES  — tamaño máximo por archivo antes de rotar (default: 10485760 = 10 MB)
+     * LOG_FILE_COUNT      — número de archivos de rotación a conservar (default: 5)
+     * LOG_FILE_APPEND     — true = continúa el archivo existente al reiniciar (default: true)
+     * </pre>
+     */
     private static void configureLogging() {
-        String level = env("LOG_LEVEL", "INFO");
+        // 1. Aplicar niveles por paquete desde logging.properties en classpath
+        applyClasspathPackageLevels();
+
+        // 2. Configurar ConsoleHandler con el nivel global
+        String levelStr = env("LOG_LEVEL", "INFO");
+        Level level;
         try {
-            LoggingConfigurator.configureRootLogger(Level.parse(level.toUpperCase()));
+            level = Level.parse(levelStr.toUpperCase());
         } catch (IllegalArgumentException e) {
-            LoggingConfigurator.configureRootLogger(Level.INFO);
+            level = Level.INFO;
         }
+        Logger root = LoggingConfigurator.configureRootLogger(level);
+
+        // 3. Añadir FileHandler con rotación si LOG_FILE está definido
+        String logFile = env("LOG_FILE", null);
+        if (logFile != null && !logFile.isBlank()) {
+            addFileHandler(root, logFile, level);
+        }
+    }
+
+    /**
+     * Lee {@code logging.properties} del classpath y aplica los niveles por
+     * paquete ({@code nombre.del.paquete.level=NIVEL}) sin tocar handlers.
+     *
+     * <p>Este método se llama antes de {@code configureRootLogger} para que
+     * los niveles de paquete sobrevivan aunque {@link LoggingConfigurator}
+     * reemplace los handlers del root logger.
+     */
+    private static void applyClasspathPackageLevels() {
+        try (InputStream is = ApplicationBootstrap.class
+                .getClassLoader().getResourceAsStream("logging.properties")) {
+            if (is == null) return;
+
+            Properties props = new Properties();
+            props.load(is);
+
+            for (String key : props.stringPropertyNames()) {
+                if (!key.endsWith(".level") || key.equals(".level")) continue;
+                String loggerName = key.substring(0, key.length() - ".level".length());
+                String levelName  = props.getProperty(key, "").trim();
+                if (levelName.isBlank()) continue;
+                try {
+                    Logger.getLogger(loggerName).setLevel(Level.parse(levelName.toUpperCase()));
+                } catch (IllegalArgumentException ignored) {
+                    // Nivel desconocido — ignorar silenciosamente
+                }
+            }
+        } catch (IOException e) {
+            // Si no se puede leer el archivo continuamos con los defaults
+        }
+    }
+
+    /**
+     * Añade un {@link FileHandler} con rotación automática al root logger.
+     *
+     * <p>El patrón del archivo acepta los especificadores de JUL:
+     * <ul>
+     *   <li>{@code %g} — número de generación (0, 1, 2…)</li>
+     *   <li>{@code %u} — número único para evitar conflictos</li>
+     *   <li>{@code %h} — directorio home del usuario</li>
+     * </ul>
+     *
+     * <p>Si el patrón no contiene {@code %g} se añade automáticamente antes
+     * de la extensión (o al final), para que la rotación genere nombres distintos.
+     *
+     * @param root    root logger al que añadir el handler
+     * @param pattern ruta/patrón del archivo de log
+     * @param level   nivel a aplicar al handler (igual que el root)
+     */
+    private static void addFileHandler(Logger root, String pattern, Level level) {
+        // Asegurar que el patrón incluye %g para que la rotación produzca nombres distintos
+        String resolvedPattern = pattern.contains("%g") ? pattern : addGenerationToken(pattern);
+
+        // Crear el directorio padre si no existe
+        try {
+            Path dir = Paths.get(resolvedPattern.replaceAll("%[guh]", "0")).getParent();
+            if (dir != null) Files.createDirectories(dir);
+        } catch (IOException e) {
+            EtherLog.warn(ApplicationBootstrap.class,
+                    "No se pudo crear el directorio de logs '{}': {}", pattern, e.getMessage());
+            return;
+        }
+
+        long   maxBytes = parseLong(env("LOG_FILE_MAX_BYTES", ""), 10 * 1024 * 1024); // 10 MB
+        int    count    = (int) parseLong(env("LOG_FILE_COUNT",    ""), 5);
+        boolean append  = !"false".equalsIgnoreCase(env("LOG_FILE_APPEND", "true"));
+
+        try {
+            FileHandler fh = new FileHandler(resolvedPattern, maxBytes, count, append);
+            fh.setLevel(level);
+            fh.setFormatter(new EtherLogFormatter());
+            root.addHandler(fh);
+
+            EtherLog.info(ApplicationBootstrap.class,
+                    "FileHandler activado — archivo={} maxBytes={} rotaciones={} append={}",
+                    resolvedPattern, maxBytes, count, append);
+        } catch (IOException e) {
+            EtherLog.warn(ApplicationBootstrap.class,
+                    "No se pudo activar el FileHandler para '{}': {}", resolvedPattern, e.getMessage());
+        }
+    }
+
+    /**
+     * Inserta {@code .%g} antes de la extensión del archivo, o al final si no
+     * tiene extensión. Así {@code /var/log/app.log} → {@code /var/log/app.%g.log}.
+     */
+    static String addGenerationToken(String pattern) {
+        int dot = pattern.lastIndexOf('.');
+        int sep = Math.max(pattern.lastIndexOf('/'), pattern.lastIndexOf('\\'));
+        // El punto debe ser parte del nombre del archivo, no de un directorio
+        if (dot > sep) {
+            return pattern.substring(0, dot) + ".%g" + pattern.substring(dot);
+        }
+        return pattern + ".%g";
     }
 
     // ── .env loader ──────────────────────────────────────────────────────────

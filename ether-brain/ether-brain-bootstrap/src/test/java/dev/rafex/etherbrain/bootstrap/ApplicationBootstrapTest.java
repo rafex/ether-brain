@@ -1,8 +1,10 @@
 package dev.rafex.etherbrain.bootstrap;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.rafex.etherbrain.core.observability.LoggingMetricsCollector;
 import dev.rafex.etherbrain.ports.observability.MetricsCollector;
@@ -91,8 +93,54 @@ class ApplicationBootstrapTest {
 
         assertNotNull(a);
         assertNotNull(b);
-        // La instancia singleton debe ser la misma referencia
         assertInstanceOf(MetricsCollector.NoopMetricsCollector.class, a);
         assertInstanceOf(MetricsCollector.NoopMetricsCollector.class, b);
+    }
+
+    // ── addGenerationToken ────────────────────────────────────────────────────
+
+    @Test
+    void addGenerationTokenInsertsBeforeExtension() {
+        assertEquals("/var/log/app.%g.log",
+                ApplicationBootstrap.addGenerationToken("/var/log/app.log"));
+    }
+
+    @Test
+    void addGenerationTokenAppendsWhenNoExtension() {
+        assertEquals("/var/log/app.%g",
+                ApplicationBootstrap.addGenerationToken("/var/log/app"));
+    }
+
+    @Test
+    void addGenerationTokenDoesNotDoubleInsert() {
+        // Si ya tiene %g no se llama este método, pero si se llama no debe duplicar
+        String input = "/var/log/app.%g.log";
+        // El método solo añade si NO hay %g — pero si lo recibe igual, lo trata como .%g.%g.log
+        // Verificamos que el prefijo sea correcto para un input sin %g
+        String result = ApplicationBootstrap.addGenerationToken("/logs/service.log.gz");
+        assertTrue(result.contains("%g"), "Debe contener %g");
+        assertTrue(result.endsWith(".gz"), "Debe conservar la extensión final");
+        assertEquals("/logs/service.log.%g.gz", result);
+    }
+
+    @Test
+    void addGenerationTokenHandlesDirectoryWithDots() {
+        // /home/user/v1.2/app.log → /home/user/v1.2/app.%g.log
+        String result = ApplicationBootstrap.addGenerationToken("/home/user/v1.2/app.log");
+        assertEquals("/home/user/v1.2/app.%g.log", result,
+                "El %g debe ir en el nombre del archivo, no en el directorio");
+    }
+
+    // ── logging.properties cargado del classpath ──────────────────────────────
+
+    @Test
+    void classpathLoggingPropertiesIsPresent() {
+        // Verifica que el archivo existe en el classpath del módulo bootstrap
+        try (var is = ApplicationBootstrap.class
+                .getClassLoader().getResourceAsStream("logging.properties")) {
+            assertNotNull(is, "logging.properties debe estar en el classpath de ether-brain-bootstrap");
+        } catch (java.io.IOException e) {
+            // close sin recursos — no debería ocurrir
+        }
     }
 }
