@@ -30,6 +30,11 @@ import java.util.Map;
  *   <li>{@code BedrockCodec} → {@code base + /model/{model}/invoke}</li>
  * </ul>
  *
+ * <h2>Temperature</h2>
+ * <p>Set via {@code LLM_TEMPERATURE} env var or {@link #withTemperature}.
+ * Use {@link #TEMPERATURE_UNSET} (the default, {@code -1.0}) to let each codec
+ * apply its own default. Supported range: {@code 0.0 – 2.0} (provider-dependent).
+ *
  * <h2>Extra headers</h2>
  * Use {@link #withExtraHeaders} to add provider-specific headers, e.g. for OpenRouter:
  * <pre>{@code
@@ -44,32 +49,56 @@ public record HttpModelConfig(
         String apiKey,
         String model,
         int maxTokens,
+        double temperature,
         Duration timeout,
         Map<String, String> extraHeaders
 ) {
+
+    /**
+     * Sentinel value for {@code temperature}: means "not set — use codec default".
+     * Codecs treat any value {@code < 0} as unset and omit or substitute their own default.
+     */
+    public static final double TEMPERATURE_UNSET = -1.0;
 
     public HttpModelConfig {
         extraHeaders = (extraHeaders == null) ? Map.of() : Map.copyOf(extraHeaders);
     }
 
-    /** Backward-compatible 5-arg constructor (no extra headers). */
+    /** Backward-compatible 5-arg constructor (no temperature, no extra headers). */
     public HttpModelConfig(URI endpoint, String apiKey, String model,
                            int maxTokens, Duration timeout) {
-        this(endpoint, apiKey, model, maxTokens, timeout, Map.of());
+        this(endpoint, apiKey, model, maxTokens, TEMPERATURE_UNSET, timeout, Map.of());
+    }
+
+    /** Backward-compatible 6-arg constructor (no temperature). */
+    public HttpModelConfig(URI endpoint, String apiKey, String model,
+                           int maxTokens, Duration timeout,
+                           Map<String, String> extraHeaders) {
+        this(endpoint, apiKey, model, maxTokens, TEMPERATURE_UNSET, timeout, extraHeaders);
     }
 
     // ── Fluent modifiers ──────────────────────────────────────────────────────
 
     /** Returns a copy with a different {@code maxTokens} limit. */
     public HttpModelConfig withMaxTokens(int tokens) {
-        return new HttpModelConfig(endpoint, apiKey, model, tokens, timeout, extraHeaders);
+        return new HttpModelConfig(endpoint, apiKey, model, tokens, temperature, timeout, extraHeaders);
+    }
+
+    /**
+     * Returns a copy with the given sampling temperature.
+     * Pass {@link #TEMPERATURE_UNSET} to revert to codec default.
+     *
+     * @param temp sampling temperature (typical range {@code 0.0 – 2.0})
+     */
+    public HttpModelConfig withTemperature(double temp) {
+        return new HttpModelConfig(endpoint, apiKey, model, maxTokens, temp, timeout, extraHeaders);
     }
 
     /** Returns a copy with additional HTTP headers merged into any existing ones. */
     public HttpModelConfig withExtraHeaders(Map<String, String> headers) {
         var merged = new java.util.HashMap<>(extraHeaders);
         merged.putAll(headers);
-        return new HttpModelConfig(endpoint, apiKey, model, maxTokens, timeout, merged);
+        return new HttpModelConfig(endpoint, apiKey, model, maxTokens, temperature, timeout, merged);
     }
 
     // ── Anthropic ──────────────────────────────────────────────────────────────

@@ -178,6 +178,9 @@ public final class OpenAiCodec implements ProviderCodec {
         ObjectNode body = mapper.createObjectNode();
         body.put("model", config.model());
         body.put("max_tokens", config.maxTokens());     // required by most providers
+        if (config.temperature() >= 0) {
+            body.put("temperature", config.temperature());
+        }
 
         ArrayNode messages = body.putArray("messages");
 

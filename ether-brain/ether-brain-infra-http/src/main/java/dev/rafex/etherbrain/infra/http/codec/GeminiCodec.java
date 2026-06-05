@@ -196,9 +196,11 @@ public final class GeminiCodec implements ProviderCodec {
         }
 
         // Config de generación
-        body.putObject("generationConfig")
-                .put("maxOutputTokens", config.maxTokens())
-                .put("temperature", 0.7);
+        ObjectNode genConfig = body.putObject("generationConfig")
+                .put("maxOutputTokens", config.maxTokens());
+        // temperature: usa el valor configurado; si no está definido, usa 0.7 (default Gemini)
+        genConfig.put("temperature",
+                config.temperature() >= 0 ? config.temperature() : 0.7);
 
         return mapper.writeValueAsString(body);
     }

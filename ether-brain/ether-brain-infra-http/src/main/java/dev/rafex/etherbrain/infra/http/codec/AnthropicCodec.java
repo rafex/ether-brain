@@ -148,6 +148,9 @@ public final class AnthropicCodec implements ProviderCodec {
         ObjectNode body = mapper.createObjectNode();
         body.put("model",      config.model());
         body.put("max_tokens", config.maxTokens());
+        if (config.temperature() >= 0) {
+            body.put("temperature", config.temperature());
+        }
 
         // System is a top-level field in Anthropic's API
         if (request.system() != null && !request.system().isBlank()) {

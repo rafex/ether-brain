@@ -128,6 +128,9 @@ public final class BedrockCodec implements ProviderCodec {
         ObjectNode body = mapper.createObjectNode();
         body.put("model", config.model());
         body.put("max_tokens", config.maxTokens());
+        if (config.temperature() >= 0) {
+            body.put("temperature", config.temperature());
+        }
 
         // System prompt as top-level field (Anthropic-style)
         if (request.system() != null && !request.system().isBlank()) {

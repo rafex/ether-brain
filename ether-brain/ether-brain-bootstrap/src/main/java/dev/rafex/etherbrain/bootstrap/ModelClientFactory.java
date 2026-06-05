@@ -20,9 +20,10 @@ import java.time.Duration;
  * LLM_URL        — base URL of the provider (required if a real LLM is used)
  * LLM_TOKEN      — API key / Bearer token (may be empty for local models)
  * LLM_MODEL      — model name
- * LLM_TYPE       — codec selector: openai | anthropic | gemini | bedrock
- *                  (inferred from hostname when absent)
- * LLM_MAX_TOKENS — max tokens for model response (default: 4096)
+ * LLM_TYPE        — codec selector: openai | anthropic | gemini | bedrock
+ *                   (inferred from hostname when absent)
+ * LLM_MAX_TOKENS  — max tokens for model response (default: 4096)
+ * LLM_TEMPERATURE — sampling temperature, e.g. 0.7 (default: codec-specific)
  * </pre>
  *
  * <p>When {@code LLM_URL} is absent the factory returns a {@link StubModelClient}
@@ -53,16 +54,24 @@ public final class ModelClientFactory {
                     "LLM_URL está definida pero falta LLM_MODEL.");
         }
 
-        int maxTokens = (int) parseLong(env("LLM_MAX_TOKENS", "4096"), 4096);
+        int    maxTokens   = (int) parseLong(env("LLM_MAX_TOKENS",  "4096"), 4096);
+        double temperature = parseDouble(env("LLM_TEMPERATURE", ""),
+                                         HttpModelConfig.TEMPERATURE_UNSET);
 
         HttpModelConfig config = new HttpModelConfig(
                 URI.create(llmUrl), llmToken, llmModel, maxTokens, timeout);
 
+        if (temperature >= 0) {
+            config = config.withTemperature(temperature);
+        }
+
         ProviderCodec codec   = resolveCodec(llmUrl);
         String        llmType = env("LLM_TYPE", "openai");
         EtherLog.info(ModelClientFactory.class,
-                "LLM → {} | tipo={} | modelo={} | maxTokens={} | timeout={}s",
-                llmUrl, llmType, llmModel, maxTokens, timeout.toSeconds());
+                "LLM → {} | tipo={} | modelo={} | maxTokens={} | temp={} | timeout={}s",
+                llmUrl, llmType, llmModel, maxTokens,
+                temperature < 0 ? "default" : temperature,
+                timeout.toSeconds());
 
         return new HttpModelClient(config, codec);
     }
@@ -122,5 +131,10 @@ public final class ModelClientFactory {
 
     static long parseLong(String value, long fallback) {
         try { return Long.parseLong(value); } catch (NumberFormatException e) { return fallback; }
+    }
+
+    static double parseDouble(String value, double fallback) {
+        if (value == null || value.isBlank()) return fallback;
+        try { return Double.parseDouble(value); } catch (NumberFormatException e) { return fallback; }
     }
 }
