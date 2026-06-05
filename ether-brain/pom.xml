@@ -61,6 +61,7 @@
         <module>ether-brain-bootstrap</module>
         <module>ether-brain-transport-cli</module>
         <module>ether-brain-transport-http</module>
+        <module>ether-brain-transport-mqtt</module>
         <module>ether-brain-architecture-tests</module>
     </modules>
 
