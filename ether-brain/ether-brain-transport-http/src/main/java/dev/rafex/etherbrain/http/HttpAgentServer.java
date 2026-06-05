@@ -169,17 +169,26 @@ public final class HttpAgentServer {
      * or if no token is configured (auth disabled).
      */
     private boolean isAuthorized(HttpExchange ex) {
+        return isAuthorized(ex.getRequestHeaders().getFirst("Authorization"));
+    }
+
+    /**
+     * Core auth check — package-private for unit tests.
+     *
+     * @param authHeader value of the {@code Authorization} request header; may be {@code null}
+     */
+    boolean isAuthorized(String authHeader) {
         if (authToken == null) return true;
-        String header = ex.getRequestHeaders().getFirst("Authorization");
-        return ("Bearer " + authToken).equals(header);
+        return ("Bearer " + authToken).equals(authHeader);
     }
 
     /**
      * Returns {@code true} if the given IP address has exceeded {@link #rateLimitRpm}
      * requests within the last 60 seconds. Thread-safe sliding-window implementation.
      * Always returns {@code false} when {@link #rateLimitRpm} is 0 (disabled).
+     * Package-private for unit tests.
      */
-    private boolean isRateLimited(String ip) {
+    boolean isRateLimited(String ip) {
         if (rateLimitRpm <= 0) return false;
         long now         = System.currentTimeMillis();
         long windowStart = now - 60_000L;
@@ -203,8 +212,9 @@ public final class HttpAgentServer {
      * <p>Blocks loopback, RFC-1918 private, and link-local addresses to prevent
      * Server-Side Request Forgery (SSRF) attacks.  Set
      * {@code CALLBACK_ALLOW_PRIVATE=true} to bypass in trusted internal environments.
+     * Package-private for unit tests.
      */
-    private boolean isSafeCallbackUrl(String url) {
+    boolean isSafeCallbackUrl(String url) {
         if (url == null || url.isBlank()) return false;
         try {
             java.net.URI uri = java.net.URI.create(url);

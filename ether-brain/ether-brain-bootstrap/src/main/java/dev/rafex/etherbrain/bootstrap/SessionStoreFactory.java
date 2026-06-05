@@ -20,7 +20,7 @@ public final class SessionStoreFactory {
     private SessionStoreFactory() {}
 
     public static SessionStore build() {
-        String dir = System.getenv("SESSION_DIR");
+        String dir = env("SESSION_DIR", null);
         if (dir == null || dir.isBlank()) {
             EtherLog.info(SessionStoreFactory.class,
                     "SESSION_DIR no definido — sesiones en memoria (no persistentes).");

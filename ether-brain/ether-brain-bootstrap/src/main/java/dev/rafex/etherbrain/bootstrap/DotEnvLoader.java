@@ -73,7 +73,12 @@ public final class DotEnvLoader {
     }
 
     private static Path resolve() {
+        // Check both real env vars and system properties (the latter lets tests
+        // and the bootstrap itself override the location without OS env vars)
         String explicit = System.getenv("ENV_FILE");
+        if (explicit == null || explicit.isBlank()) {
+            explicit = System.getProperty("ENV_FILE");
+        }
         if (explicit != null && !explicit.isBlank()) {
             Path p = Path.of(explicit);
             if (Files.exists(p)) return p;

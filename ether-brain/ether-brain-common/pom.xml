@@ -12,6 +12,14 @@
     <artifactId>ether-brain-common</artifactId>
     <name>ether-brain-common</name>
 
+    <dependencies>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
     <build>
         <plugins>
             <plugin>
