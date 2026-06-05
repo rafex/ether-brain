@@ -73,6 +73,16 @@
             <version>${project.version}</version>
         </dependency>
         <dependency>
+            <groupId>dev.rafex.ether.brain</groupId>
+            <artifactId>ether-brain-transport-http</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dev.rafex.ether.brain</groupId>
+            <artifactId>ether-brain-transport-mqtt</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
             <groupId>com.tngtech.archunit</groupId>
             <artifactId>archunit-junit5</artifactId>
             <scope>test</scope>
