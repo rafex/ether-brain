@@ -34,33 +34,53 @@ Dar contexto de prioridad sin convertir esto en una lista de tickets.
   - Sesion persistente entre procesos: OK
   - Tool call `current_time`: OK
   - (ver `docs/integracion-llm.md`)
-
 - `systemPrompt` configurable via `AGENT_SYSTEM_PROMPT` env var.
 - `modelTimeout` sincronizado con `HttpModelConfig` via `LLM_TIMEOUT_SECONDS`.
 - `AGENT_MAX_STEPS` configurable via env var.
 - TTL de sesiones en `FileSessionStore` via `SESSION_TTL_HOURS`.
-- `ether-brain-transport-http` — API HTTP REST con `com.sun.net.httpserver`.
+- **`ether-brain-transport-http`** — API HTTP REST con Jetty 12.1.10:
+  - SSE streaming (`GET /sessions/{id}/run/stream`)
+  - Eventos async fire-and-forget (`POST /events`)
+  - Cancelacion de loop activo (`DELETE /sessions/{id}/cancel`)
+  - Seguridad: `AUTH_TOKEN` (Bearer), rate limiting, SSRF guard, HTTPS
+- **`ether-brain-transport-mqtt`** — Bridge MQTT con Eclipse Paho:
+  - Compatible con Mosquitto y cualquier broker MQTT 3.1/3.1.1
+  - Un virtual thread por mensaje entrante
+  - Tests sin broker real (RecordingBridge)
+- **`LLM_TEMPERATURE`** configurable por env var — aplica a los 4 codecs.
+- **`LLM_MAX_TOKENS`** configurable por env var.
+- **`MetricsCollector`** como puerto del dominio:
+  - `LoggingMetricsCollector` emite lineas `[METRIC]` via JUL
+  - `noop()` singleton controlado por `METRICS_ENABLED`
+- **Logging mejorado**:
+  - `logging.properties` en classpath silencia Jetty, Paho, Jackson, AWS SDK a WARNING
+  - `LOG_FILE` activa `FileHandler` con rotacion automatica
+  - `LOG_FILE_MAX_BYTES`, `LOG_FILE_COUNT`, `LOG_FILE_APPEND`
+- **ArchUnit** — 6 reglas de arquitectura hexagonal verificadas en cada build:
+  - core aislado, ports puros, bootstrap sin transportes, transportes independientes entre si
 - CI/CD con GitHub Actions (`.github/workflows/ci.yml`).
-- Tests de `GeminiCodec` (7) y `BedrockCodec` (6).
-- Tests de `HttpAgentServer.extractMessage` (6).
+- Ejecucion paralela de sub-agentes (BatchedToolRequest + executeBatchedTools).
+- Comunicacion agente-a-agente via AgentTool + sesiones aisladas.
+- SSE streaming de respuestas token a token.
 
 ## Ahora
 
-- Probar `ether-brain-transport-http` con un cliente HTTP real.
+- Validar `ether-brain-transport-http` con un cliente HTTP real en produccion.
+- Validar `ether-brain-transport-mqtt` con un broker Mosquitto real.
 - Estrategia de resumen de historial cuando el contexto es largo.
 
 ## Despues
 
-- Prueba de tool calls explícitos (que el modelo invoque `current_time`).
-- Conectar faiss-poc end-to-end con `knowledge_search`.
-- Observabilidad: metricas de latencia por step.
+- Bedrock streaming (binary event stream, AWS SDK v2).
+- Adaptador Micrometer / OpenTelemetry para `MetricsCollector`.
+- `ether-brain-event-bus` — adaptadores para Kafka, SQS, AMQP y cron.
 
 ## Mas adelante
 
 - Tool calling estructurado por proveedor.
-- Streaming y observabilidad mas rica.
 - Handoffs o subagentes sobre el mismo runtime base.
 - Integraciones externas adicionales como MCP si el dominio ya lo pide.
+- Distribucion de agentes multi-nodo.
 
 ## No hacer por ahora
 

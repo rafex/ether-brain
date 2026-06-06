@@ -7,7 +7,7 @@ La mayoría de proveedores usan el formato OpenAI-compatible.
 
 ## Cómo configurar
 
-Solo necesitas 4 variables de entorno (en tu `.env` o exportadas en el shell):
+Variables de entorno principales (en tu `.env` o exportadas en el shell):
 
 ```bash
 LLM_TYPE=openai          # openai | anthropic | gemini | bedrock
@@ -16,8 +16,20 @@ LLM_TOKEN=csk-...        # API key (vacío para Ollama local)
 LLM_MODEL=gpt-oss-120b   # nombre del modelo
 ```
 
+Variables opcionales para ajustar el comportamiento del modelo:
+
+```bash
+LLM_MAX_TOKENS=4096      # límite de tokens en la respuesta (default: 4096)
+LLM_TEMPERATURE=0.7      # temperatura del modelo 0.0–2.0 (omitir = default del proveedor)
+LLM_TIMEOUT_SECONDS=30   # timeout de la llamada HTTP al LLM (default: 30s)
+```
+
 > **`LLM_URL` es la URL base** — el codec añade el path correcto automáticamente.
 > No incluyas `/v1/chat/completions` ni ningún otro path.
+
+> **`LLM_TEMPERATURE`** — si no se define, cada codec usa el default del proveedor.
+> `GeminiCodec` usa `0.7` cuando la variable no está definida; los demás codecs
+> omiten el campo y dejan que el proveedor decida.
 
 ---
 

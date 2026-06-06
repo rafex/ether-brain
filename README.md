@@ -28,11 +28,14 @@ sin depender de frameworks pesados.
 
 ## Alcance actual
 
-- Disenar el runtime base de un solo agente.
-- Definir contratos para modelo, tools, memoria de sesion y politicas.
-- Preparar la evolucion hacia persistencia, handoffs y mas adaptadores.
-- Mantener un scaffold multi-modulo que preserve la arquitectura desde
-  la primera linea de codigo.
+- Runtime de un solo agente con loop completo: LLM → tool calls → respuesta.
+- 4 codecs de proveedores LLM: OpenAI-compatible, Anthropic, Gemini, Bedrock.
+- Tres transportes de entrada: CLI (REPL), HTTP REST (Jetty 12) y MQTT (Mosquitto).
+- Observabilidad: metricas via `MetricsCollector`, logging con rotacion de archivos.
+- Seguridad HTTP: autenticacion Bearer, rate limiting, SSRF guard, HTTPS.
+- Arquitectura verificada en CI con 6 reglas ArchUnit.
+- Variables de entorno universales: `LLM_TYPE`, `LLM_URL`, `LLM_TOKEN`, `LLM_MODEL`.
+- Sin frameworks en el dominio: Java 21 puro con virtual threads.
 
 ## Flujo recomendado
 

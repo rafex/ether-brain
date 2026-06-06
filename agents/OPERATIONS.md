@@ -14,16 +14,17 @@ Guia de operacion de EtherBrain. Lee esto antes de ejecutar el runtime.
 
 ## Variables de entorno
 
-Cuatro variables. Solo hay dos tipos de API LLM en el mercado.
+### LLM
 
-| Variable | Valores | Default | Descripcion |
-|---|---|---|---|
-| `LLM_URL` | URL completa | — | Endpoint del proveedor |
-| `LLM_TOKEN` | string | `""` | API key / token (vacio para Ollama local) |
-| `LLM_MODEL` | string | — | Nombre del modelo |
-| `LLM_TYPE` | `anthropic` \| `openai` | `openai` | Tipo de API |
-| `SESSION_DIR` | ruta | en memoria | Directorio de sesiones persistentes |
-| `LOG_LEVEL` | `OFF`…`ALL` | `INFO` | Nivel de logging |
+| Variable | Descripcion | Default |
+|---|---|---|
+| `LLM_TYPE` | `openai` \| `anthropic` \| `gemini` \| `bedrock` | — |
+| `LLM_URL` | URL BASE del proveedor (sin path — el codec lo añade) | — |
+| `LLM_TOKEN` | API key / token (vacio para Ollama local) | `""` |
+| `LLM_MODEL` | Nombre del modelo | — |
+| `LLM_MAX_TOKENS` | Limite de tokens en la respuesta | `4096` |
+| `LLM_TEMPERATURE` | Temperatura `0.0`–`2.0` (omitir = default del proveedor) | — |
+| `LLM_TIMEOUT_SECONDS` | Timeout de llamada al LLM en segundos | `30` |
 
 Existen 4 formatos reales de API LLM en el mercado. `LLM_TYPE` los identifica:
 
@@ -36,18 +37,72 @@ Existen 4 formatos reales de API LLM en el mercado. `LLM_TYPE` los identifica:
 
 Si `LLM_TYPE` no esta definido, se intenta inferir del path de la URL como fallback.
 
-URLs de referencia por proveedor:
+URLs de referencia por proveedor (URL base — sin path):
 
 | Proveedor | `LLM_URL` |
 |---|---|
-| Anthropic | `https://api.anthropic.com/v1/messages` |
-| OpenAI | `https://api.openai.com/v1/chat/completions` |
-| Groq | `https://api.groq.com/openai/v1/chat/completions` |
-| Cerebras | `https://api.cerebras.ai/v1/chat/completions` |
-| Deepseek | `https://api.deepseek.com/v1/chat/completions` |
-| Mistral | `https://api.mistral.ai/v1/chat/completions` |
-| OpenRouter | `https://openrouter.ai/api/v1/chat/completions` |
-| Ollama local | `http://localhost:11434/v1/chat/completions` |
+| Anthropic | `https://api.anthropic.com` |
+| OpenAI | `https://api.openai.com` |
+| Groq | `https://api.groq.com/openai` |
+| Cerebras | `https://api.cerebras.ai` |
+| Deepseek | `https://api.deepseek.com` |
+| Mistral | `https://api.mistral.ai` |
+| OpenRouter | `https://openrouter.ai` |
+| Ollama local | `http://localhost:11434` |
+
+### Sesiones
+
+| Variable | Descripcion | Default |
+|---|---|---|
+| `SESSION_DIR` | Directorio de sesiones persistentes (omitir = en memoria) | — |
+| `SESSION_TTL_HOURS` | TTL de sesiones en disco | `168` (7 dias) |
+
+### Agente
+
+| Variable | Descripcion | Default |
+|---|---|---|
+| `AGENT_MAX_STEPS` | Maximo de iteraciones por sesion | `8` |
+| `AGENT_SYSTEM_PROMPT` | Prompt de sistema configurable | — |
+| `AGENT_RETRY_MAX` | Reintentos de tools fallidas | `0` |
+| `AGENT_RETRY_DELAY_MS` | Espera entre reintentos en ms | `500` |
+
+### Transporte HTTP
+
+| Variable | Descripcion | Default |
+|---|---|---|
+| `HTTP_PORT` | Puerto del servidor HTTP | `8080` |
+| `AUTH_TOKEN` | Token Bearer requerido en todas las peticiones (omitir = sin auth) | — |
+| `HTTP_MAX_BODY_BYTES` | Limite de tamaño de body en bytes | `65536` |
+| `HTTP_RATE_LIMIT_RPS` | Limite de peticiones por segundo (0 = sin limite) | `0` |
+| `HTTPS_PORT` | Puerto HTTPS adicional | — |
+| `HTTPS_KEYSTORE_PATH` | Ruta al keystore JKS | — |
+| `HTTPS_KEYSTORE_PASSWORD` | Password del keystore | — |
+| `HTTP_EVENT_QUEUE` | Capacidad de la cola de eventos async | `100` |
+
+### Transporte MQTT
+
+| Variable | Descripcion | Default |
+|---|---|---|
+| `MQTT_BROKER_URL` | URL del broker (`tcp://host:1883` o `ssl://host:8883`) | — |
+| `MQTT_CLIENT_ID` | Identificador del cliente MQTT | `ether-brain-1` |
+| `MQTT_USERNAME` | Usuario MQTT (omitir si no requiere auth) | — |
+| `MQTT_PASSWORD` | Password MQTT | — |
+| `MQTT_REQUEST_TOPIC` | Topic donde escucha mensajes entrantes | `agent/requests` |
+| `MQTT_RESPONSE_TOPIC` | Topic base para respuestas | `agent/responses` |
+| `MQTT_QOS` | Quality of Service `0`\|`1`\|`2` | `1` |
+| `MQTT_KEEP_ALIVE_SECS` | Intervalo de keepalive en segundos | `60` |
+| `MQTT_CLEAN_SESSION` | Sesion limpia en cada conexion | `true` |
+
+### Observabilidad
+
+| Variable | Descripcion | Default |
+|---|---|---|
+| `METRICS_ENABLED` | `true` → LoggingMetricsCollector; `false` → noop | `true` |
+| `LOG_LEVEL` | Nivel global del runtime (`OFF`…`ALL`) | `INFO` |
+| `LOG_FILE` | Ruta del archivo de log (activa rotacion) | — |
+| `LOG_FILE_MAX_BYTES` | Tamaño maximo por archivo de log | `10485760` (10 MB) |
+| `LOG_FILE_COUNT` | Numero de archivos rotativos | `5` |
+| `LOG_FILE_APPEND` | Añadir al archivo existente al arrancar | `true` |
 
 ---
 
@@ -72,9 +127,10 @@ cd ether-brain/
 ### Con Anthropic (turno unico)
 
 ```bash
-export MODEL_PROVIDER=anthropic
-export ANTHROPIC_API_KEY=sk-ant-...
-export MODEL_NAME=claude-opus-4-5        # opcional, es el default
+export LLM_TYPE=anthropic
+export LLM_URL=https://api.anthropic.com
+export LLM_TOKEN=sk-ant-...
+export LLM_MODEL=claude-opus-4-5
 
 cd ether-brain/
 ./mvnw -pl ether-brain-transport-cli exec:java -Dexec.args="Quien eres?"
@@ -83,20 +139,21 @@ cd ether-brain/
 ### Con OpenAI (turno unico)
 
 ```bash
-export MODEL_PROVIDER=openai
-export OPENAI_API_KEY=sk-...
-export MODEL_NAME=gpt-4o-mini
+export LLM_TYPE=openai
+export LLM_URL=https://api.openai.com
+export LLM_TOKEN=sk-...
+export LLM_MODEL=gpt-4o-mini
 
 cd ether-brain/
 ./mvnw -pl ether-brain-transport-cli exec:java -Dexec.args="Quien eres?"
 ```
 
-### Con un LLM local compatible con OpenAI (ollama, etc.)
+### Con un LLM local compatible con OpenAI (Ollama)
 
 ```bash
-export MODEL_PROVIDER=openai-compatible
-export OPENAI_BASE_URL=http://localhost:11434/v1/chat/completions
-export MODEL_NAME=llama3.2
+export LLM_TYPE=openai
+export LLM_URL=http://localhost:11434
+export LLM_MODEL=llama3.2
 
 cd ether-brain/
 ./mvnw -pl ether-brain-transport-cli exec:java -Dexec.args="Quien eres?"
@@ -105,8 +162,10 @@ cd ether-brain/
 ### REPL interactivo
 
 ```bash
-export MODEL_PROVIDER=anthropic
-export ANTHROPIC_API_KEY=sk-ant-...
+export LLM_TYPE=openai
+export LLM_URL=https://api.cerebras.ai
+export LLM_TOKEN=csk-...
+export LLM_MODEL=gpt-oss-120b
 export SESSION_DIR=/tmp/etherbrain-sessions
 
 cd ether-brain/
@@ -122,6 +181,84 @@ Escribe mensajes en el prompt `>`. Escribe `exit` para salir.
 ```
 
 La sesion `proyecto-x` se guarda en `SESSION_DIR/proyecto-x.json` si `SESSION_DIR` esta definido.
+
+---
+
+## Transporte HTTP
+
+### Arrancar el servidor HTTP
+
+```bash
+export LLM_TYPE=openai
+export LLM_URL=https://api.cerebras.ai
+export LLM_TOKEN=csk-...
+export LLM_MODEL=gpt-oss-120b
+export HTTP_PORT=8080
+export AUTH_TOKEN=mi-token-secreto   # opcional pero recomendado
+
+java -jar ether-brain-transport-http/target/ether-brain-http.jar
+```
+
+### Llamar al agente
+
+```bash
+# Turno sincronico
+curl -X POST http://localhost:8080/sessions/mi-sesion/run \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer mi-token-secreto" \
+  -d '{"message":"¿Qué hora es?"}'
+
+# SSE streaming
+curl -N http://localhost:8080/sessions/mi-sesion/run/stream \
+  -H "Authorization: Bearer mi-token-secreto"
+
+# Evento async (fire-and-forget)
+curl -X POST http://localhost:8080/events \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer mi-token-secreto" \
+  -d '{"session_id":"tarea-larga","message":"Procesa el reporte"}'
+
+# Cancelar sesion activa
+curl -X DELETE http://localhost:8080/sessions/mi-sesion/cancel \
+  -H "Authorization: Bearer mi-token-secreto"
+```
+
+---
+
+## Transporte MQTT
+
+### Arrancar el bridge MQTT
+
+```bash
+export LLM_TYPE=openai
+export LLM_URL=https://api.cerebras.ai
+export LLM_TOKEN=csk-...
+export LLM_MODEL=gpt-oss-120b
+export MQTT_BROKER_URL=tcp://localhost:1883
+export MQTT_REQUEST_TOPIC=agent/requests
+export MQTT_RESPONSE_TOPIC=agent/responses
+
+java -jar ether-brain-transport-mqtt/target/ether-brain-mqtt.jar
+```
+
+### Enviar un mensaje y recibir respuesta (con Mosquitto CLI)
+
+```bash
+# Suscribirse al topic de respuesta en una terminal
+mosquitto_sub -t "agent/responses/#" -v
+
+# Publicar un mensaje en otra terminal
+mosquitto_pub -t "agent/requests" \
+  -m '{"session_id":"s1","message":"¿Qué hora es?"}'
+```
+
+Respuesta esperada en `agent/responses/s1`:
+```json
+{"session_id":"s1","answer":"Son las 15:42 UTC.","status":"ok"}
+```
+
+Si se omite `session_id`, se genera uno automaticamente (`mqtt-XXXXXXXX`).
+Si se omite `reply_to`, la respuesta va a `{MQTT_RESPONSE_TOPIC}/{session_id}`.
 
 ---
 
@@ -159,6 +296,13 @@ Tests especificos:
 
 ```bash
 ./mvnw -pl ether-brain-core -Dtest=AgentLoopTest test
+./mvnw -pl ether-brain-transport-mqtt -Dtest=MqttAgentBridgeTest test
+```
+
+Tests de arquitectura:
+
+```bash
+./mvnw -pl ether-brain-architecture-tests test
 ```
 
 ---
@@ -167,23 +311,24 @@ Tests especificos:
 
 ### El runtime dice "using demo client"
 
-`MODEL_PROVIDER` no esta definido o tiene un valor desconocido. Verifica:
+`LLM_TYPE` no esta definido o tiene un valor desconocido. Verifica:
 
 ```bash
-echo $MODEL_PROVIDER
-echo $ANTHROPIC_API_KEY
+echo $LLM_TYPE
+echo $LLM_URL
+echo $LLM_TOKEN
 ```
 
 ### Error: "Missing required environment variable"
 
-Falta una variable obligatoria para el proveedor elegido.
-Ejemplo: `MODEL_PROVIDER=anthropic` requiere `ANTHROPIC_API_KEY`.
+Falta una variable obligatoria. Las minimas son: `LLM_TYPE`, `LLM_URL`, `LLM_MODEL`.
+`LLM_TOKEN` puede estar vacio para Ollama local.
 
 ### Error: "Model call timed out"
 
 El proveedor LLM no respondio en el tiempo configurado (default: 30s).
 - Verifica conectividad a la API del proveedor.
-- Aumenta el timeout via codigo si es necesario (ver `AgentConfig.defaults()`).
+- Aumenta el timeout: `LLM_TIMEOUT_SECONDS=60`.
 
 ### Error de tool en los logs pero el loop continua
 
@@ -193,11 +338,25 @@ continuar. Busca lineas `WARN` con "tool ... failed" en los logs.
 
 ### "Max steps exceeded without final answer"
 
-El modelo solicito mas de `maxSteps` (default: 8) iteraciones sin
+El modelo solicito mas de `AGENT_MAX_STEPS` (default: 8) iteraciones sin
 producir una respuesta final. Causas posibles:
 - El modelo entra en un bucle de tool calls.
 - Una tool siempre falla y el modelo sigue reintentando.
-- `maxSteps` demasiado bajo para la tarea.
+- `AGENT_MAX_STEPS` demasiado bajo para la tarea.
+
+### MQTT: el bridge no recibe mensajes
+
+- Verifica que el broker este corriendo: `mosquitto_pub -t test -m hello`
+- Verifica `MQTT_BROKER_URL`, `MQTT_REQUEST_TOPIC`
+- Activa trazas: `LOG_LEVEL=FINE` (o descomenta `dev.rafex.etherbrain.mqtt.level=FINE` en `logging.properties`)
+
+### HTTP: 401 Unauthorized
+
+`AUTH_TOKEN` esta definido pero el header `Authorization: Bearer <token>` no coincide.
+
+### HTTP: 429 Too Many Requests
+
+`HTTP_RATE_LIMIT_RPS` alcanzado. Reduce la frecuencia de llamadas o sube el limite.
 
 ---
 
@@ -213,7 +372,7 @@ public final class MiTool implements Tool {
 
     @Override
     public String description() {
-        return "Descripcion clara de lo que hace la tool para que el modelo sepa cuando usarla.";
+        return "Descripcion clara para que el modelo sepa cuando usar esta tool.";
     }
 
     @Override
@@ -222,8 +381,7 @@ public final class MiTool implements Tool {
             {
               "type": "object",
               "properties": {
-                "param1": { "type": "string", "description": "..." },
-                "param2": { "type": "integer", "description": "..." }
+                "param1": { "type": "string", "description": "..." }
               },
               "required": ["param1"]
             }
@@ -232,8 +390,6 @@ public final class MiTool implements Tool {
 
     @Override
     public ToolResult execute(String arguments, ExecutionContext context) throws Exception {
-        // Parsear arguments (JSON string) e implementar la logica
-        // Ejemplo: usar context.agentConfig().remoteService("faiss-poc") para obtener URL
         return new ToolResult(name(), true, "resultado");
     }
 }
@@ -258,12 +414,15 @@ AgentConfig agentConfig = AgentConfig.defaults(
 | Modulo | Rol |
 |---|---|
 | `ether-brain-ports` | Interfaces del dominio (contratos) |
-| `ether-brain-core` | Loop del agente, prompt builder, politicas |
+| `ether-brain-core` | Loop del agente, prompt builder, politicas, metricas |
 | `ether-brain-common` | Excepciones compartidas |
 | `ether-brain-infra-memory` | Sesiones en memoria |
-| `ether-brain-infra-http` | Cliente HTTP para proveedores LLM |
+| `ether-brain-infra-http` | Cliente HTTP para proveedores LLM + 4 codecs |
 | `ether-brain-infra-file` | Sesiones persistidas en archivos JSON |
-| `ether-brain-tools-local` | Tools Java locales |
-| `ether-brain-bootstrap` | Ensamblado con env vars |
-| `ether-brain-transport-cli` | Punto de entrada CLI |
-| `ether-brain-architecture-tests` | Validacion de fronteras hexagonales |
+| `ether-brain-tools-local` | Tools Java locales (EchoTool, CurrentTimeTool) |
+| `ether-brain-tools-remote` | Tools de servicios externos (KnowledgeSearchTool) |
+| `ether-brain-bootstrap` | Ensamblado del runtime desde env vars |
+| `ether-brain-transport-cli` | Entrada CLI (REPL y turno unico) |
+| `ether-brain-transport-http` | Entrada HTTP REST con Jetty 12 (SSE, async, seguridad) |
+| `ether-brain-transport-mqtt` | Entrada MQTT con Eclipse Paho (Mosquitto-compatible) |
+| `ether-brain-architecture-tests` | Verificacion de fronteras hexagonales (ArchUnit, 6 reglas) |

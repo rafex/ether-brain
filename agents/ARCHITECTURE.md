@@ -12,9 +12,28 @@ repite hasta cumplir una condicion de corte.
 
 La forma esperada del sistema es:
 
+```
 Usuario -> Session -> PromptBuilder -> ModelClient -> ModelResponse
--> ToolRegistry -> ToolExecutor -> ToolResult -> Session -> siguiente
-iteracion
+-> ToolRegistry -> ToolExecutor -> ToolResult -> Session -> siguiente iteracion
+```
+
+## Modulos actuales
+
+```
+ether-brain-ports              # contratos del dominio (interfaces puras)
+ether-brain-core               # loop, prompt builder, politicas
+ether-brain-common             # excepciones compartidas
+ether-brain-infra-memory       # sesiones en memoria
+ether-brain-infra-http         # cliente HTTP + 4 codecs LLM
+ether-brain-infra-file         # sesiones persistidas en JSON
+ether-brain-tools-local        # tools Java locales
+ether-brain-tools-remote       # tools de servicios externos
+ether-brain-bootstrap          # ensamblado del runtime desde env vars
+ether-brain-transport-cli      # entrada CLI (REPL y turno unico)
+ether-brain-transport-http     # entrada HTTP REST (Jetty 12, SSE, eventos async)
+ether-brain-transport-mqtt     # entrada MQTT (Eclipse Paho, Mosquitto)
+ether-brain-architecture-tests # verificacion de fronteras hexagonales (ArchUnit)
+```
 
 ## Puertos del dominio
 
@@ -33,6 +52,10 @@ iteracion
   puerto de salida para ejecutar una tool concreta con contexto.
 - `PolicyEngine`:
   puerto de dominio para validar limites de seguridad y ejecucion.
+- `MetricsCollector`:
+  puerto de observabilidad. Tres operaciones: `increment`, `record`, `gauge`.
+  Implementaciones: `LoggingMetricsCollector` (JUL) y `noop()` (singleton).
+  No introduce dependencias de frameworks en el dominio.
 
 ## Casos de uso del nucleo
 
@@ -46,13 +69,26 @@ iteracion
 - `ExecutionContext`:
   encapsula sesion, configuracion, trazas y politicas activas.
 
-## Adaptadores esperados
+## Adaptadores de entrada (transportes)
 
-- Entrada:
-  CLI, API HTTP o pruebas de integracion.
-- Salida:
-  cliente HTTP para proveedores LLM, almacenamiento en memoria o archivo,
-  logger, tools locales y futuras fuentes remotas de capacidades.
+- `ether-brain-transport-cli`:
+  REPL interactivo y modo turno unico. Fat jar `ether-brain-cli.jar`.
+- `ether-brain-transport-http`:
+  API REST con Jetty 12.1.10. Endpoints SSE, eventos async y cancelacion
+  de sesiones. Seguridad via `AUTH_TOKEN`, rate limiting y guard SSRF.
+  Fat jar `ether-brain-http.jar`.
+- `ether-brain-transport-mqtt`:
+  Bridge MQTT con Eclipse Paho v3. Consume mensajes de un topic de
+  requests, despacha en virtual thread y publica respuesta en topic de
+  respuesta. Fat jar `ether-brain-mqtt.jar`.
+
+## Adaptadores de salida
+
+- `HttpModelClient` con 4 codecs: `OpenAiCodec`, `AnthropicCodec`,
+  `GeminiCodec`, `BedrockCodec`.
+- `InMemorySessionStore` y `FileSessionStore`.
+- `InMemoryToolRegistry` con `CompositeToolRegistry`.
+- `LoggingMetricsCollector` y `MetricsCollector.noop()`.
 
 ## Flujo principal
 
@@ -64,21 +100,34 @@ iteracion
    en la conversacion.
 6. El loop continua hasta respuesta final, maximo de pasos o timeout.
 
-## Reglas de dependencia
+## Reglas de dependencia (verificadas por ArchUnit)
 
 - El dominio no depende de adaptadores concretos.
 - Los adaptadores implementan puertos definidos por el dominio.
+- `ports` no depende de nada interno del proyecto.
+- `bootstrap` no depende de ningun transporte.
+- Los transportes no se importan entre si.
 - Las tools no deben acceder directamente a infraestructura fuera de su
   adaptador sin pasar por politicas.
 - Los formatos de respuesta del proveedor no deben filtrarse al dominio.
 - Integraciones como MCP deben entrar mediante registros o proveedores
   especificos, no acopladas al `AgentLoop`.
 
+## Observabilidad
+
+- **Logging**: `ether-logging-core` sobre JUL. `logging.properties` en
+  classpath silencia terceros (Jetty, Paho, Jackson, AWS SDK) a WARNING.
+  `LOG_LEVEL` controla el nivel del root logger. `LOG_FILE` activa
+  FileHandler con rotacion automatica.
+- **Metricas**: `MetricsCollector` como puerto. Metricas emitidas:
+  `http.requests`, `http.requests.errors`, `mqtt.messages.published`,
+  `llm.generate`, `tool.execute`, etc.
+
 ## Riesgos actuales
 
-- Parseo de salida del modelo demasiado fragil en v0.
-  Mitigacion: usar un contrato de salida controlado y facil de validar.
+- Parseo de salida del modelo puede ser fragil para respuestas inusuales.
+  Mitigacion: contratos de salida controlados por codec.
 - Crecimiento accidental del historial de conversacion.
-  Mitigacion: aplicar `MessageWindow` y politicas de tamano.
-- Acoplamiento prematuro a un proveedor LLM.
-  Mitigacion: mantener `ModelClient` como puerto estable.
+  Mitigacion: `MessageWindow` y politicas de tamano.
+- Bedrock streaming aun no implementado (binary event stream).
+  Mitigacion: pendiente en roadmap.

@@ -27,7 +27,7 @@ cd ether-brain/
 
 ```bash
 export LLM_TYPE=anthropic
-export LLM_URL=https://api.anthropic.com/v1/messages
+export LLM_URL=https://api.anthropic.com
 export LLM_TOKEN=sk-ant-...
 export LLM_MODEL=claude-opus-4-5
 
@@ -39,7 +39,7 @@ cd ether-brain/
 
 ```bash
 export LLM_TYPE=openai
-export LLM_URL=https://api.groq.com/openai/v1/chat/completions
+export LLM_URL=https://api.groq.com/openai
 export LLM_TOKEN=gsk_...
 export LLM_MODEL=llama-3.3-70b-versatile
 
@@ -51,7 +51,7 @@ cd ether-brain/
 
 ```bash
 export LLM_TYPE=openai
-export LLM_URL=https://openrouter.ai/api/v1/chat/completions
+export LLM_URL=https://openrouter.ai
 export LLM_TOKEN=sk-or-...
 export LLM_MODEL=anthropic/claude-opus-4-5   # ver openrouter.ai/models
 
@@ -63,7 +63,7 @@ cd ether-brain/
 
 ```bash
 export LLM_TYPE=openai
-export LLM_URL=http://localhost:11434/v1/chat/completions
+export LLM_URL=http://localhost:11434
 export LLM_MODEL=llama3.2
 
 cd ether-brain/
@@ -74,7 +74,7 @@ cd ether-brain/
 
 ```bash
 export LLM_TYPE=gemini
-export LLM_URL=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent
+export LLM_URL=https://generativelanguage.googleapis.com
 export LLM_TOKEN=YOUR_GOOGLE_API_KEY
 export LLM_MODEL=gemini-2.0-flash
 
@@ -86,7 +86,7 @@ cd ether-brain/
 
 ```bash
 export LLM_TYPE=bedrock
-export LLM_URL=https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-opus-4-5-20250514-v1:12000/invoke
+export LLM_URL=https://bedrock-runtime.us-east-1.amazonaws.com
 export LLM_MODEL=anthropic.claude-opus-4-5-20250514-v1:12000
 
 cd ether-brain/
@@ -99,14 +99,52 @@ Consulta [AWS SDK for Java](https://docs.aws.amazon.com/sdk-for-java/) para conf
 ## REPL interactivo con sesion persistente
 
 ```bash
-export LLM_TYPE=anthropic
-export LLM_URL=https://api.anthropic.com/v1/messages
-export LLM_TOKEN=sk-ant-...
-export LLM_MODEL=claude-opus-4-5
+export LLM_TYPE=openai
+export LLM_URL=https://api.cerebras.ai
+export LLM_TOKEN=csk-...
+export LLM_MODEL=gpt-oss-120b
 export SESSION_DIR=/tmp/etherbrain-sessions
 
 cd ether-brain/
 ./mvnw -pl ether-brain-transport-cli exec:java -Dexec.args="--session mi-sesion"
+```
+
+## Servidor HTTP (Jetty)
+
+```bash
+export LLM_TYPE=openai
+export LLM_URL=https://api.cerebras.ai
+export LLM_TOKEN=csk-...
+export LLM_MODEL=gpt-oss-120b
+export HTTP_PORT=8080
+export AUTH_TOKEN=mi-token-secreto
+
+java -jar ether-brain-transport-http/target/ether-brain-http.jar
+
+# Llamar al agente
+curl -X POST http://localhost:8080/sessions/s1/run \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer mi-token-secreto" \
+  -d '{"message":"Hola"}'
+```
+
+## Bridge MQTT
+
+```bash
+export LLM_TYPE=openai
+export LLM_URL=https://api.cerebras.ai
+export LLM_TOKEN=csk-...
+export LLM_MODEL=gpt-oss-120b
+export MQTT_BROKER_URL=tcp://localhost:1883
+export MQTT_REQUEST_TOPIC=agent/requests
+export MQTT_RESPONSE_TOPIC=agent/responses
+
+java -jar ether-brain-transport-mqtt/target/ether-brain-mqtt.jar
+
+# Enviar mensaje (requiere mosquitto-clients)
+mosquitto_pub -t agent/requests -m '{"session_id":"s1","message":"Hola"}'
+# Recibir respuesta
+mosquitto_sub -t "agent/responses/#" -v
 ```
 
 ## Tests

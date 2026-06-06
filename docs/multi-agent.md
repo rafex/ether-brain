@@ -16,9 +16,10 @@ Guía completa para crear agentes autónomos que se colaboran entre sí.
 | Sub-agente como tool in-process (`AgentTool`) | ✅ |
 | Registro de agentes por nombre | ✅ |
 | Sub-agente como tool HTTP (`HttpProxyTool`) | ✅ |
-| Ejecución paralela de tools | ⏳ |
-| Streaming token a token | ⏳ |
-| Trigger por Kafka / cron / queue | ⏳ |
+| Ejecución paralela de sub-agentes (`BatchedToolRequest`) | ✅ |
+| Streaming token a token | ✅ |
+| Trigger por MQTT (Mosquitto) | ✅ |
+| Trigger por Kafka / SQS / AMQP / cron | ⏳ |
 
 ---
 
@@ -248,34 +249,18 @@ AGENT_TOOLS_FILE=/ruta/a/tools.json
 
 ---
 
-## Próximas capacidades
+## Capacidades pendientes
 
-### Ejecución paralela de sub-agentes
+### Triggers externos avanzados
 
-Actualmente los sub-agentes se llaman secuencialmente (un paso del loop = una tool call).
-El soporte para batch tool calls (OpenAI y Anthropic lo permiten) está en roadmap:
-
-```
-Paso 3: modelo retorna [investigador("query A"), investigador("query B")]
-        → ejecutar ambos en paralelo via CompletableFuture
-        → agregar ambos resultados antes del siguiente turno
-```
-
-### Streaming token a token
-
-El SSE actual entrega la respuesta completa al final. Para streaming real:
-- Activar `"stream": true` en la request al proveedor
-- Parsear chunks SSE del proveedor en el codec
-- Enviarlos al cliente conforme llegan
-
-### Triggers externos
-
-Para que los agentes respondan a eventos externos (no solo HTTP):
+El transporte MQTT ya permite triggers desde cualquier broker Mosquitto-compatible.
+Para triggers basados en colas de mensajería empresarial:
 
 ```
 Kafka topic → EventBusAdapter → AgentEvent → AgentRuntime
-Cron schedule → SchedulerAdapter → AgentEvent → AgentRuntime
-SQS queue → SQSAdapter → AgentEvent → AgentRuntime
+SQS queue   → SQSAdapter      → AgentEvent → AgentRuntime
+AMQP topic  → AMQPAdapter     → AgentEvent → AgentRuntime
+Cron        → SchedulerAdapter → AgentEvent → AgentRuntime
 ```
 
-Requiere nuevo módulo `ether-brain-event-bus`.
+Requiere módulo `ether-brain-event-bus` (pendiente en roadmap).
